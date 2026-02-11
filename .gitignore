@@ -43,3 +43,20 @@ app.*.map.json
 /android/app/debug
 /android/app/profile
 /android/app/release
+
+# FVM
+.fvmrc
+.fvm/
+# もし「.fvmフォルダは残して中身だけ無視」したい場合は上の .fvm/ を消して、代わりに下を使う
+# .fvm/flutter_sdk/
+# .fvm/versions/
+# .fvm/fvm_config.json
+# .fvm/release
+# .fvm/version
+
+# VSCode settings
+.vscode/settings.json
+
+# iOS
+ios/Podfile.lock
+ios/Runner.xcodeproj/project.pbxproj
