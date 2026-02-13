@@ -74,13 +74,8 @@ class _CardEditPageState extends ConsumerState<CardEditPage> {
     setState(() => _saving = true);
 
     try {
-      final uid = ref.read(uidProvider);
-      final repo = ref.read(cardRepositoryProvider);
-
-      // await しない：同期完了を待たずにキューに投げる
-      repo.updateCard(
-        uid,
-        widget.card.id,
+      final params = UpdateCardParams(
+        cardId: widget.card.id,
         name: _name.text.trim(),
         company: _company.text.trim(),
         industry: _industry.text.trim(),
@@ -91,8 +86,11 @@ class _CardEditPageState extends ConsumerState<CardEditPage> {
         rawText: widget.card.rawText,
       );
 
+      // ✅ awaitしてから戻る（戻った時点で確実に反映）
+      await ref.read(updateCardProvider(params).future);
+
       if (!mounted) return;
-      Navigator.of(context).pop(); // 詳細へ戻る（一覧はstreamで更新）
+      Navigator.of(context).pop(); // 詳細へ戻る
     } catch (e) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(

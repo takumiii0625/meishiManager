@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../models/card_model.dart';
 import '../repositories/card_repository.dart';
+import 'auth_providers.dart';
 
 final firestoreProvider = Provider<FirebaseFirestore>((ref) {
   return FirebaseFirestore.instance;
@@ -12,20 +13,20 @@ final cardRepositoryProvider = Provider<CardRepository>((ref) {
   return CardRepository(ref.watch(firestoreProvider));
 });
 
-// まずはuid固定（Auth入れたら差し替え）
-const _dummyUid = 'dummy_uid';
-final uidProvider = Provider<String>((ref) => _dummyUid);
-
+/// 名刺一覧（uid は auth_providers.dart の uidProvider を使う）
 final cardsStreamProvider = StreamProvider<List<CardModel>>((ref) {
-  return ref.watch(cardRepositoryProvider).watchCards(_dummyUid);
+  final uid = ref.watch(uidProvider);
+
+  // ★uidが空の間はFirestoreに行かない（起動直後の事故防止）
+  if (uid.isEmpty) {
+    return const Stream<List<CardModel>>.empty();
+    // もしくは Stream.value(<CardModel>[])
+  }
+
+  return ref.watch(cardRepositoryProvider).watchCards(uid);
 });
 
-/// 既存：動作確認用（ダミー追加）
-final addDummyCardProvider = FutureProvider.autoDispose<void>((ref) async {
-  await ref.watch(cardRepositoryProvider).addDummy(_dummyUid);
-});
-
-/// 追加：フォーム入力で追加するためのパラメータ
+/// フォーム入力で追加するためのパラメータ
 class AddCardParams {
   AddCardParams({
     required this.name,
@@ -44,15 +45,12 @@ class AddCardParams {
   final String notes;
 }
 
-/// 追加：フォーム入力で追加（uidはdummyを使用）
-final addCardProvider = FutureProvider.autoDispose.family<void, AddCardParams>((
-  ref,
-  params,
-) async {
-  await ref
-      .watch(cardRepositoryProvider)
-      .addCard(
-        _dummyUid,
+/// フォーム入力で追加
+final addCardProvider =
+    FutureProvider.autoDispose.family<void, AddCardParams>((ref, params) async {
+  final uid = ref.read(uidProvider);
+  await ref.watch(cardRepositoryProvider).addCard(
+        uid,
         name: params.name,
         company: params.company,
         industry: params.industry,
@@ -62,11 +60,69 @@ final addCardProvider = FutureProvider.autoDispose.family<void, AddCardParams>((
       );
 });
 
-final cardStreamProvider = StreamProvider.family<CardModel, String>((
-  ref,
-  cardId,
-) {
+/// 1件の名刺を監視（詳細画面用）
+final cardStreamProvider =
+    StreamProvider.family<CardModel, String>((ref, cardId) {
   final uid = ref.watch(uidProvider);
+
+  if (uid.isEmpty) {
+    // ★uidが無い状態で詳細を開かない前提だけど、保険でエラーにせず待機
+    return const Stream<CardModel>.empty();
+  }
+
   final repo = ref.watch(cardRepositoryProvider);
   return repo.watchCard(uid, cardId);
+});
+
+
+/// 削除（長押し用）
+final deleteCardProvider =
+    FutureProvider.autoDispose.family<void, String>((ref, cardId) async {
+  final uid = ref.read(uidProvider);
+  await ref.watch(cardRepositoryProvider).deleteCard(uid, cardId);
+});
+
+/// 更新：フォーム入力で更新するためのパラメータ
+class UpdateCardParams {
+  UpdateCardParams({
+    required this.cardId,
+    required this.name,
+    required this.company,
+    this.industry = '',
+    this.phone = '',
+    this.email = '',
+    this.notes = '',
+    this.imageUrl = '',
+    this.rawText = '',
+  });
+
+  final String cardId;
+  final String name;
+  final String company;
+  final String industry;
+  final String phone;
+  final String email;
+  final String notes;
+  final String imageUrl;
+  final String rawText;
+}
+
+/// 更新：フォーム入力で更新（uidはauthのuidProviderを使用）
+final updateCardProvider =
+    FutureProvider.autoDispose.family<void, UpdateCardParams>((ref, params) async {
+  final uid = ref.read(uidProvider);
+  final repo = ref.watch(cardRepositoryProvider);
+
+  await repo.updateCard(
+    uid,
+    params.cardId,
+    name: params.name,
+    company: params.company,
+    industry: params.industry,
+    phone: params.phone,
+    email: params.email,
+    notes: params.notes,
+    imageUrl: params.imageUrl,
+    rawText: params.rawText,
+  );
 });

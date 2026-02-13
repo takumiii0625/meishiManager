@@ -26,6 +26,50 @@ class CardDetailPage extends ConsumerWidget {
     );
   }
 
+  Future<void> _confirmAndDelete(
+    BuildContext context,
+    WidgetRef ref,
+    CardModel card,
+  ) async {
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (_) => AlertDialog(
+        title: const Text('削除しますか？'),
+        content: Text('「${card.name}」の名刺を削除します。'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(false),
+            child: const Text('キャンセル'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.of(context).pop(true),
+            child: const Text('削除'),
+          ),
+        ],
+      ),
+    );
+
+    if (ok != true) return;
+
+    try {
+      // await して確実に削除してから戻る（削除は待った方が安全）
+      await ref.read(deleteCardProvider(card.id).future);
+
+      if (!context.mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('削除しました')),
+      );
+
+      // 詳細 → 一覧へ戻る
+      Navigator.of(context).pop();
+    } catch (e) {
+      if (!context.mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('削除に失敗: $e')),
+      );
+    }
+  }
+
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final cardAsync = ref.watch(cardStreamProvider(cardId));
@@ -50,6 +94,11 @@ class CardDetailPage extends ConsumerWidget {
                   MaterialPageRoute(builder: (_) => CardEditPage(card: card)),
                 );
               },
+            ),
+            IconButton(
+              icon: const Icon(Icons.delete_outline),
+              onPressed: () => _confirmAndDelete(context, ref, card),
+              tooltip: '削除',
             ),
           ],
         ),
