@@ -14,6 +14,9 @@
 // flutter run --dart-define=GEMINI_API_KEY=あなたのキー
 // ------------------------------------------------------------
 
+import 'package:path/path.dart' as p;
+import 'package:image/image.dart' as img;
+import 'package:path_provider/path_provider.dart';
 import 'dart:convert';
 import 'dart:io';
 
@@ -26,10 +29,12 @@ import 'package:permission_handler/permission_handler.dart';
 class _GeminiCardResult {
   final String text; // 画像から読めた全文
   final Map<String, dynamic> card; // 整形した名刺情報
+  final Map<String, dynamic>? corners;
 
   const _GeminiCardResult({
     required this.text,
     required this.card,
+    this.corners,
   });
 }
 
@@ -153,6 +158,8 @@ class _OcrScanPageState extends State<OcrScanPage> {
       try {
         await c.setFocusMode(FocusMode.auto);
         await c.setExposureMode(ExposureMode.auto);
+        // 少し待ってピントを安定させる
+        await Future.delayed(const Duration(milliseconds: 300));
       } catch (_) {}
 
       // 撮影
@@ -165,6 +172,45 @@ class _OcrScanPageState extends State<OcrScanPage> {
 
       // Gemini呼び出し
       final result = await _callGeminiBusinessCard(base64Jpeg: b64);
+
+      // 自動切り抜き処理
+      if (result.corners != null) {
+      final originalImage = img.decodeImage(bytes);
+    if (originalImage != null) {
+      // 重要：スマホ特有の回転情報を「物理的なピクセル」に固定する
+      final correctedImage = img.bakeOrientation(originalImage);
+
+      final double w = correctedImage.width.toDouble();
+      final double h = correctedImage.height.toDouble();
+
+      // Geminiの[0-1000]座標を実際のピクセルに変換
+      // topLeft[0]がx、topLeft[1]がy
+      final corners = result.corners!;
+      final double x1 = corners['topLeft'][0] * w / 1000;
+      final double y1 = corners['topLeft'][1] * h / 1000;
+      final double x2 = corners['bottomRight'][0] * w / 1000;
+      final double y2 = corners['bottomRight'][1] * h / 1000;
+
+      // 3. チョキチョキ切り抜く
+      final cropped = img.copyCrop(
+        correctedImage,
+        x: x1.toInt(),
+        y: y1.toInt(),
+        width: (x2 - x1).toInt(),
+        height: (y2 - y1).toInt(),
+      );
+
+      // 4. 保存
+      final croppedBytes = img.encodeJpg(cropped);
+      final directory = await getTemporaryDirectory();
+      final path = p.join(directory.path, "ai_crop_${DateTime.now().millisecondsSinceEpoch}.jpg");
+      await File(path).writeAsBytes(croppedBytes);
+
+      setState(() {
+        _lastShot = XFile(path); // 🌟 これでAIが選んだ範囲が画面に反映される！
+      });
+    }
+  }
 
       if (!mounted) return;
       setState(() {
@@ -254,6 +300,7 @@ class _OcrScanPageState extends State<OcrScanPage> {
     final prompt = '''
 あなたは名刺OCRの抽出器です。
 次の画像は「名刺」です。日本語（漢字/かな/英数字）をできるだけ正確に読み取ってください。
+さらに、名刺の四隅の境界線を1ピクセル単位で正確に特定してください。背景は一切含まず、名刺の角の1ピクセル内側を指定するつもりで座標を出してください。
 
 必ず「JSONのみ」を返してください（説明文、```、前後の文章は禁止）。
 JSONのスキーマはこれに厳密に従ってください:
@@ -272,6 +319,12 @@ JSONのスキーマはこれに厳密に従ってください:
     "postal_code": "",
     "address": "",
     "others": []
+  },
+  "corners": {
+    "topLeft": [x, y],
+    "topRight": [x, y],
+    "bottomRight": [x, y],
+    "bottomLeft": [x, y]
   }
 }
 
@@ -280,6 +333,8 @@ JSONのスキーマはこれに厳密に従ってください:
 - phone/email/url は配列
 - text には全文を入れる
 - card には名刺として使える形に整理して入れる
+- 座標[x, y]は、画像の「幅1000、高さ1000」とした相対座標（0〜1000の整数）で回答。
+- 読み取れない項目は空文字 or 空配列。
 ''';
 
     final body = {
@@ -334,8 +389,9 @@ JSONのスキーマはこれに厳密に従ってください:
     final card = (outJson['card'] is Map)
         ? (outJson['card'] as Map).cast<String, dynamic>()
         : <String, dynamic>{};
+    final corners = outJson['corners'] as Map<String, dynamic>?;
 
-    return _GeminiCardResult(text: text, card: card);
+    return _GeminiCardResult(text: text, card: card, corners: corners);
   }
 
   /// Geminiの出力から「最初の { ... }」を抜き出す

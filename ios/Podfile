@@ -48,6 +48,11 @@ post_install do |installer|
         # --- ここが重要 ---
         'PERMISSION_CAMERA=1',
       ]
+
+      config.build_settings['IPHONEOS_DEPLOYMENT_TARGET'] = '13.0'
+      config.build_settings['SWIFT_VERSION'] = '5.0'
+      # コンパイラが「警告をエラーとして扱わない」ように強制
+      config.build_settings['OTHER_SWIFT_FLAGS'] = '$(inherited) -suppress-warnings'
     end
   end
 end

@@ -78,6 +78,26 @@ class CardsPage extends ConsumerWidget {
               final c = cards[i];
 
               return ListTile(
+                leading: Container(
+                  width: 80,
+                  height: 50,
+                  decoration: BoxDecoration(
+                    color: Colors.grey[100],
+                    borderRadius: BorderRadius.circular(4),
+                    border: Border.all(color: Colors.black12),
+                  ),
+                  clipBehavior: Clip.antiAlias,
+                  child: AspectRatio(
+                    aspectRatio: 91 / 55,
+                    child: c.imageUrl.isNotEmpty
+                      ? Image.network(
+                          c.imageUrl,
+                          fit: BoxFit.cover,
+                          errorBuilder: (_, __, ___) => const Icon(Icons.broken_image, color: Colors.grey),
+                        )
+                      : const Icon(Icons.person, color: Colors.grey),
+                  ),
+                ),
                 title: Text(c.name),
                 subtitle: Text('${c.company} / ${c.email}'),
                 onTap: () {

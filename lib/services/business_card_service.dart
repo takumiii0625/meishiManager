@@ -1,3 +1,5 @@
+import 'dart:io';
+import 'package:firebase_storage/firebase_storage.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 
@@ -21,6 +23,34 @@ class BusinessCardService {
     if (user == null) {
       throw Exception('ログイン情報がありません');
     }
+
+    String? imageUrl;
+
+    //Storageへのアップロード
+    if (imagePath != null && imagePath.isNotEmpty) {
+    try {
+      final file = File(imagePath);
+      // 保存するファイル名を決める（重複しないように時間を使う）
+      final fileName = '${DateTime.now().millisecondsSinceEpoch}.jpg';
+      
+      // Storageの参照を作成
+      final storageRef = FirebaseStorage.instance
+          .ref()
+          .child('users')
+          .child(user.uid)
+          .child('cards')
+          .child(fileName);
+
+      // ファイルをアップロード
+      await storageRef.putFile(file);
+
+      // 公開URLを取得
+      imageUrl = await storageRef.getDownloadURL();
+    } catch (e) {
+      print('Storageアップロード失敗: $e');
+      // 画像アップロードに失敗してもデータ登録は進めるなら何もしない
+    }
+  }
 
     final colRef = _db.collection('users').doc(user.uid).collection('cards');
 
@@ -60,7 +90,7 @@ class BusinessCardService {
       'phone': phone,
       'email': email,
       'notes': notes,
-      'imageUrl': '',
+      'imageUrl': imageUrl ?? '',
 
       'rawText': rawText,
       'status': 'pending_industry',
@@ -72,7 +102,12 @@ class BusinessCardService {
       'imagePath': imagePath,
     };
 
-    final ref = await colRef.add(doc);
+  final ref = await _db
+        .collection('users')
+        .doc(user.uid)
+        .collection('cards')
+        .add(doc);
+
     return ref.id;
   }
 }
