@@ -1,44 +1,23 @@
-// lib/views/ocr/ocr_scan_page.dart
-//
-// ------------------------------------------------------------
-// 名刺OCRスキャン画面（撮影 → GeminiでJSON化）
-// ------------------------------------------------------------
-// ✅ この画面でやること
-// 1) カメラを表示（横伸びしない / 上に寄せる）
-// 2) ボタンで静止画を撮影
-// 3) 撮影画像を Gemini API に送って「名刺JSON + 全文テキスト」を取得
-// 4) 結果を画面下に表示
-// 5) 「保存して次へ（連続）」または「この結果を確定（単発）」が押せる
-//
-// ✅ 重要（キーの渡し方）
-// flutter run --dart-define=GEMINI_API_KEY=あなたのキー
-// ------------------------------------------------------------
-
-import 'package:path/path.dart' as p;
-import 'package:image/image.dart' as img;
-import 'package:path_provider/path_provider.dart';
 import 'dart:convert';
 import 'dart:io';
 
+import 'dart:typed_data';
 import 'package:camera/camera.dart';
+import 'package:edge_detection/edge_detection.dart';
+import 'package:firebase_storage/firebase_storage.dart';
 import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
-import 'package:permission_handler/permission_handler.dart';
+import 'package:path/path.dart' as p;
+import 'package:path_provider/path_provider.dart';
 
-/// Gemini API呼び出し結果の「型」
+/// Gemini API呼び出し結果の型
 class _GeminiCardResult {
-  final String text; // 画像から読めた全文
-  final Map<String, dynamic> card; // 整形した名刺情報
+  final String text;
+  final Map<String, dynamic> card;
   final Map<String, dynamic>? corners;
-
-  const _GeminiCardResult({
-    required this.text,
-    required this.card,
-    this.corners,
-  });
+  const _GeminiCardResult({required this.text, required this.card, this.corners});
 }
 
-/// 「保存して次へ」が押された時に、上位画面へ結果を渡すコールバック
 typedef OnCapturedCallback = Future<void> Function(
   Map<String, dynamic> card,
   String rawText,
@@ -46,11 +25,7 @@ typedef OnCapturedCallback = Future<void> Function(
 );
 
 class OcrScanPage extends StatefulWidget {
-  const OcrScanPage({
-    super.key,
-    this.onCaptured, // 渡されなければ単発モード
-  });
-
+  const OcrScanPage({super.key, this.onCaptured});
   final OnCapturedCallback? onCaptured;
 
   @override
@@ -58,240 +33,127 @@ class OcrScanPage extends StatefulWidget {
 }
 
 class _OcrScanPageState extends State<OcrScanPage> {
-  // Gemini API Key（dart-define）
   static const String _geminiApiKey = String.fromEnvironment('GEMINI_API_KEY');
-
-  // 使用モデル
   static const String _geminiModel = 'gemini-2.0-flash';
 
-  // Camera
-  CameraController? _controller;
-  bool _initializing = true;
-
-  // UI State
   bool _busy = false;
   XFile? _lastShot;
   String _plainText = '';
   Map<String, dynamic>? _cardJson;
   String _error = '';
 
-  // ガイド枠（名刺は横長が多い）
-  final double _frameWidthFactor = 0.96;
-  final double _frameAspect = 1.70;
 
-  @override
-  void initState() {
-    super.initState();
-    _initCamera();
-  }
-
-  @override
-  void dispose() {
-    _controller?.dispose();
-    super.dispose();
-  }
-
-  /// カメラ初期化
-  Future<void> _initCamera() async {
-    setState(() {
-      _initializing = true;
-      _error = '';
-    });
-
-    // 1) カメラ権限
-    final status = await Permission.camera.request();
-    if (!status.isGranted) {
-      if (!mounted) return;
-      setState(() {
-        _initializing = false;
-        _error = 'カメラ権限が必要です（設定から許可してください）';
-      });
-      return;
+@override
+void initState() {
+  super.initState();
+  // ✅ 画面が表示されたら、0.5秒後（描画完了後）に自動でカメラを起動する
+  Future.delayed(const Duration(milliseconds: 500), () {
+    if (mounted) {
+      _captureAndOcr();
     }
-
-    // 2) 背面カメラを探す
-    final cameras = await availableCameras();
-    final back = cameras.firstWhere(
-      (c) => c.lensDirection == CameraLensDirection.back,
-      orElse: () => cameras.first,
-    );
-
-    // 3) コントローラ作成
-    final controller = CameraController(
-      back,
-      ResolutionPreset.high,
-      enableAudio: false,
-      imageFormatGroup: ImageFormatGroup.bgra8888,
-    );
-
-    await controller.initialize();
-
-    // ピント/露出オート（未対応端末があるのでtry/catch）
-    try {
-      await controller.setFocusMode(FocusMode.auto);
-      await controller.setExposureMode(ExposureMode.auto);
-    } catch (_) {}
-
-    if (!mounted) return;
-
-    setState(() {
-      _controller = controller;
-      _initializing = false;
-    });
-  }
+  });
+}
 
   /// 撮影 → Gemini OCR
   Future<void> _captureAndOcr() async {
-    final c = _controller;
-    if (c == null || !c.value.isInitialized) return;
     if (_busy) return;
 
-    setState(() {
-      _busy = true;
-      _error = '';
-      _plainText = '';
-      _cardJson = null;
-    });
-
     try {
-      // 撮影前にAF/AEを走らせる
-      try {
-        await c.setFocusMode(FocusMode.auto);
-        await c.setExposureMode(ExposureMode.auto);
-        // 少し待ってピントを安定させる
-        await Future.delayed(const Duration(milliseconds: 300));
-      } catch (_) {}
-
-      // 撮影
-      final shot = await c.takePicture();
-      _lastShot = shot;
-
-      // 画像→base64
-      final bytes = await File(shot.path).readAsBytes();
-      final b64 = base64Encode(bytes);
-
-      // Gemini呼び出し
-      final result = await _callGeminiBusinessCard(base64Jpeg: b64);
-
-      // 自動切り抜き処理
-      if (result.corners != null) {
-      final originalImage = img.decodeImage(bytes);
-    if (originalImage != null) {
-      // 重要：スマホ特有の回転情報を「物理的なピクセル」に固定する
-      final correctedImage = img.bakeOrientation(originalImage);
-
-      final double w = correctedImage.width.toDouble();
-      final double h = correctedImage.height.toDouble();
-
-      // Geminiの[0-1000]座標を実際のピクセルに変換
-      // topLeft[0]がx、topLeft[1]がy
-      final corners = result.corners!;
-      final double x1 = corners['topLeft'][0] * w / 1000;
-      final double y1 = corners['topLeft'][1] * h / 1000;
-      final double x2 = corners['bottomRight'][0] * w / 1000;
-      final double y2 = corners['bottomRight'][1] * h / 1000;
-
-      // 3. チョキチョキ切り抜く
-      final cropped = img.copyCrop(
-        correctedImage,
-        x: x1.toInt(),
-        y: y1.toInt(),
-        width: (x2 - x1).toInt(),
-        height: (y2 - y1).toInt(),
+      final directory = await getTemporaryDirectory();
+      final String croppedPath = p.join(
+        directory.path,
+        "${DateTime.now().millisecondsSinceEpoch}_cropped.jpg",
       );
 
-      // 4. 保存
-      final croppedBytes = img.encodeJpg(cropped);
-      final directory = await getTemporaryDirectory();
-      final path = p.join(directory.path, "ai_crop_${DateTime.now().millisecondsSinceEpoch}.jpg");
-      await File(path).writeAsBytes(croppedBytes);
+      bool success = await EdgeDetection.detectEdge(
+        croppedPath,
+        canUseGallery: true,
+        androidCropTitle: '名刺のスキャン',
+        androidCropReset: 'リセット',
+      );
+
+      if (!success) return;
 
       setState(() {
-        _lastShot = XFile(path); // 🌟 これでAIが選んだ範囲が画面に反映される！
+        _busy = true;
+        _error = '';
       });
-    }
-  }
+
+      final bytes = await File(croppedPath).readAsBytes();
+      final b64 = base64Encode(bytes);
+
+      // Geminiへ解析依頼
+      final geminiResult = await _callGeminiBusinessCard(base64Jpeg: b64);
+
+      // Firebaseへアップロード
+      _uploadToFirebase(bytes);
 
       if (!mounted) return;
       setState(() {
-        _plainText = result.text;
-        _cardJson = result.card;
+        _lastShot = XFile(croppedPath);
+        _plainText = geminiResult.text;
+        _cardJson = geminiResult.card;
       });
     } catch (e) {
-      if (!mounted) return;
-      setState(() {
-        _error = '撮影/解析に失敗しました: $e';
-      });
+      setState(() => _error = 'スキャンまたは解析に失敗: $e');
     } finally {
-      if (!mounted) return;
-      setState(() => _busy = false);
+      if (mounted) setState(() => _busy = false);
     }
   }
 
-  /// 保存して次へ（連続）/ 確定（単発）
+  Future<void> _uploadToFirebase(Uint8List bytes) async {
+  try {
+    final fileName = "scanned_${DateTime.now().millisecondsSinceEpoch}.jpg";
+    final storageRef = FirebaseStorage.instance.ref().child("business_cards/$fileName");
+    // Uint8Listであれば、putDataがそのまま受け取れます
+    await storageRef.putData(bytes, SettableMetadata(contentType: 'image/jpeg'));
+  } catch (e) {
+    debugPrint("Firebase保存失敗: $e");
+  }
+}
+
+  /// 保存して次へ（連続撮影ループ）
   Future<void> _saveAndNext() async {
     if (_busy) return;
-
-    final hasResult = _plainText.trim().isNotEmpty || _cardJson != null;
-    if (!hasResult) {
-      setState(() => _error = '先に「撮影してOCR」を実行してください');
-      return;
-    }
-
-    setState(() {
-      _busy = true;
-      _error = '';
-    });
+    if (_plainText.isEmpty && _cardJson == null) return;
 
     try {
-      final card = _cardJson ?? <String, dynamic>{};
+      setState(() => _busy = true);
+      final card = _cardJson ?? {};
       final text = _plainText;
       final imagePath = _lastShot?.path;
 
-      // 連続モード：上位に保存を任せる
       if (widget.onCaptured != null) {
         await widget.onCaptured!(card, text, imagePath);
+
         if (!mounted) return;
 
-        // 次の撮影に備えてリセット
         setState(() {
           _plainText = '';
           _cardJson = null;
           _lastShot = null;
+          _busy = false;
         });
 
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('保存しました。次の名刺を撮影してください')),
+          const SnackBar(content: Text('保存しました。次を撮影します'), duration: Duration(milliseconds: 1000)),
         );
+
+        // ✅ 保存後すぐに次の撮影を開始
+        _captureAndOcr();
         return;
       }
-
-      // 単発モード：結果を返して閉じる
-      if (!mounted) return;
-      Navigator.pop(context, {
-        "card": card,
-        "text": text,
-        "imagePath": imagePath,
-      });
+      Navigator.pop(context, {"card": card, "text": text, "imagePath": imagePath});
     } catch (e) {
-      if (!mounted) return;
-      setState(() => _error = '保存に失敗: $e');
+      setState(() => _error = '保存失敗: $e');
     } finally {
-      if (!mounted) return;
-      setState(() => _busy = false);
+      if (mounted) setState(() => _busy = false);
     }
   }
 
-  /// Geminiへ「名刺画像 → JSON」を依頼
-  Future<_GeminiCardResult> _callGeminiBusinessCard({
-    required String base64Jpeg,
-  }) async {
-    if (_geminiApiKey.isEmpty) {
-      throw Exception(
-        'Gemini APIキーが空です。\n'
-        'flutter run に --dart-define=GEMINI_API_KEY=... を付けてください。',
-      );
-    }
+  /// プロンプトを完全に復元したGemini呼び出し
+  Future<_GeminiCardResult> _callGeminiBusinessCard({required String base64Jpeg}) async {
+    if (_geminiApiKey.isEmpty) throw Exception('APIキーが設定されていません。');
 
     final uri = Uri.parse(
       'https://generativelanguage.googleapis.com/v1beta/models/$_geminiModel:generateContent?key=$_geminiApiKey',
@@ -300,7 +162,6 @@ class _OcrScanPageState extends State<OcrScanPage> {
     final prompt = '''
 あなたは名刺OCRの抽出器です。
 次の画像は「名刺」です。日本語（漢字/かな/英数字）をできるだけ正確に読み取ってください。
-さらに、名刺の四隅の境界線を1ピクセル単位で正確に特定してください。背景は一切含まず、名刺の角の1ピクセル内側を指定するつもりで座標を出してください。
 
 必ず「JSONのみ」を返してください（説明文、```、前後の文章は禁止）。
 JSONのスキーマはこれに厳密に従ってください:
@@ -319,12 +180,6 @@ JSONのスキーマはこれに厳密に従ってください:
     "postal_code": "",
     "address": "",
     "others": []
-  },
-  "corners": {
-    "topLeft": [x, y],
-    "topRight": [x, y],
-    "bottomRight": [x, y],
-    "bottomLeft": [x, y]
   }
 }
 
@@ -333,8 +188,6 @@ JSONのスキーマはこれに厳密に従ってください:
 - phone/email/url は配列
 - text には全文を入れる
 - card には名刺として使える形に整理して入れる
-- 座標[x, y]は、画像の「幅1000、高さ1000」とした相対座標（0〜1000の整数）で回答。
-- 読み取れない項目は空文字 or 空配列。
 ''';
 
     final body = {
@@ -342,300 +195,81 @@ JSONのスキーマはこれに厳密に従ってください:
         {
           "parts": [
             {"text": prompt},
-            {
-              "inline_data": {
-                "mime_type": "image/jpeg",
-                "data": base64Jpeg,
-              }
-            }
+            {"inline_data": {"mime_type": "image/jpeg", "data": base64Jpeg}}
           ]
         }
       ],
-      "generationConfig": {
-        "temperature": 0.1,
-        "topP": 0.9,
-        "maxOutputTokens": 2048
-      }
+      "generationConfig": {"temperature": 0.1, "topP": 0.9, "maxOutputTokens": 2048}
     };
 
-    final res = await http.post(
-      uri,
-      headers: {"Content-Type": "application/json"},
-      body: jsonEncode(body),
-    );
+    final res = await http.post(uri, headers: {"Content-Type": "application/json"}, body: jsonEncode(body));
+    if (res.statusCode != 200) throw Exception('Gemini API error: ${res.statusCode}');
 
-    if (res.statusCode != 200) {
-      throw Exception('Gemini API error: ${res.statusCode}\n${res.body}');
-    }
+    final decoded = jsonDecode(res.body);
+    final outText = decoded['candidates'][0]['content']['parts'][0]['text'] as String;
 
-    final decoded = jsonDecode(res.body) as Map<String, dynamic>;
-    final candidates = (decoded['candidates'] as List?) ?? const [];
-    if (candidates.isEmpty) {
-      throw Exception('Geminiの返答が空です（candidatesが空）');
-    }
+    // JSON部分のみ抽出
+    final start = outText.indexOf('{');
+    final end = outText.lastIndexOf('}') + 1;
+    final jsonStr = outText.substring(start, end);
+    final outJson = jsonDecode(jsonStr);
 
-    final content = candidates.first['content'] as Map<String, dynamic>?;
-    final parts = (content?['parts'] as List?) ?? const [];
-    final outText = (parts.isNotEmpty ? parts.first['text'] : null) as String?;
-
-    if (outText == null || outText.trim().isEmpty) {
-      throw Exception('Geminiの返答テキストが空です');
-    }
-
-    final cleaned = _extractFirstJsonObject(outText);
-    final outJson = jsonDecode(cleaned) as Map<String, dynamic>;
-
-    final text = (outJson['text'] ?? '') as String;
-    final card = (outJson['card'] is Map)
-        ? (outJson['card'] as Map).cast<String, dynamic>()
-        : <String, dynamic>{};
-    final corners = outJson['corners'] as Map<String, dynamic>?;
-
-    return _GeminiCardResult(text: text, card: card, corners: corners);
-  }
-
-  /// Geminiの出力から「最初の { ... }」を抜き出す
-  String _extractFirstJsonObject(String s) {
-    var t = s.trim();
-    t = t.replaceAll('```json', '').replaceAll('```', '').trim();
-
-    final start = t.indexOf('{');
-    if (start < 0) throw Exception('JSONの開始 { が見つかりません');
-
-    var depth = 0;
-    for (var i = start; i < t.length; i++) {
-      final ch = t[i];
-      if (ch == '{') depth++;
-      if (ch == '}') depth--;
-      if (depth == 0) {
-        return t.substring(start, i + 1);
-      }
-    }
-    throw Exception('JSONの終了 } が見つかりません');
-  }
-
-  /// プレビュー（位置が下がる問題対策：CenterではなくTopに寄せる）
-  Widget _buildPreview(CameraController c) {
-    return Align(
-      alignment: Alignment.topCenter, // ✅ ここが重要
-      child: AspectRatio(
-        aspectRatio: c.value.aspectRatio,
-        child: Stack(
-          fit: StackFit.expand,
-          children: [
-            CameraPreview(c),
-
-            // 上部案内
-            Align(
-              alignment: Alignment.topCenter,
-              child: Padding(
-                padding: const EdgeInsets.all(12.0),
-                child: Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
-                  decoration: BoxDecoration(
-                    color: Colors.black.withOpacity(0.55),
-                    borderRadius: BorderRadius.circular(14),
-                  ),
-                  child: const Text(
-                    '名刺を枠に大きく収めて、ピントが合ってから\n「撮影してOCR」を押してください',
-                    textAlign: TextAlign.center,
-                    style: TextStyle(color: Colors.white, fontSize: 13, height: 1.25),
-                  ),
-                ),
-              ),
-            ),
-
-            // 中央の白枠（ガイド）
-            Align(
-              alignment: Alignment.center,
-              child: FractionallySizedBox(
-                widthFactor: _frameWidthFactor,
-                child: AspectRatio(
-                  aspectRatio: _frameAspect,
-                  child: Container(
-                    decoration: BoxDecoration(
-                      borderRadius: BorderRadius.circular(18),
-                      border: Border.all(color: Colors.white, width: 3),
-                    ),
-                  ),
-                ),
-              ),
-            ),
-
-            // 処理中オーバーレイ
-            if (_busy)
-              Container(
-                color: Colors.black.withOpacity(0.25),
-                child: const Center(
-                  child: Column(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      CircularProgressIndicator(),
-                      SizedBox(height: 12),
-                      Text('解析中...', style: TextStyle(color: Colors.white)),
-                    ],
-                  ),
-                ),
-              ),
-          ],
-        ),
-      ),
-    );
-  }
-
-  /// 下部結果パネル（スクロール可）
-  Widget _buildBottomPanel(BuildContext context) {
-    final hasResult = _plainText.trim().isNotEmpty || _cardJson != null;
-
-    final buffer = StringBuffer();
-    if (_cardJson != null) {
-      buffer.writeln('--- card(JSON) ---');
-      buffer.writeln(const JsonEncoder.withIndent('  ').convert(_cardJson));
-      buffer.writeln('');
-    }
-    if (_plainText.trim().isNotEmpty) {
-      buffer.writeln('--- text(全文) ---');
-      buffer.writeln(_plainText.trim());
-    }
-
-    final displayText = hasResult ? buffer.toString() : 'ここにOCR結果が表示されます';
-
-    final h = MediaQuery.of(context).size.height;
-    final panelHeight = (h * 0.34).clamp(220.0, 340.0);
-
-    return Align(
-      alignment: Alignment.bottomCenter,
-      child: SafeArea(
-        top: false,
-        child: Container(
-          height: panelHeight,
-          margin: const EdgeInsets.fromLTRB(12, 0, 12, 12),
-          padding: const EdgeInsets.all(12),
-          decoration: BoxDecoration(
-            color: Colors.white.withOpacity(0.98),
-            borderRadius: BorderRadius.circular(18),
-            border: Border.all(color: Colors.black12),
-            boxShadow: const [
-              BoxShadow(
-                blurRadius: 10,
-                spreadRadius: 1,
-                offset: Offset(0, 4),
-                color: Color(0x22000000),
-              ),
-            ],
-          ),
-          child: Column(
-            children: [
-              if (_error.isNotEmpty)
-                Padding(
-                  padding: const EdgeInsets.only(bottom: 8),
-                  child: Text(_error, style: const TextStyle(color: Colors.red)),
-                ),
-
-              Expanded(
-                child: SingleChildScrollView(
-                  child: Text(
-                    displayText,
-                    style: TextStyle(
-                      fontSize: 13,
-                      color: hasResult ? Colors.black87 : Colors.black45,
-                      height: 1.35,
-                    ),
-                  ),
-                ),
-              ),
-
-              const SizedBox(height: 10),
-
-              Row(
-                children: [
-                  Expanded(
-                    child: OutlinedButton(
-                      onPressed: _busy
-                          ? null
-                          : () {
-                              setState(() {
-                                _plainText = '';
-                                _cardJson = null;
-                                _error = '';
-                                _lastShot = null;
-                              });
-                            },
-                      child: const Text('撮り直し'),
-                    ),
-                  ),
-                  const SizedBox(width: 10),
-                  Expanded(
-                    child: ElevatedButton.icon(
-                      onPressed: (_busy || !hasResult) ? null : _saveAndNext,
-                      icon: const Icon(Icons.save),
-                      label: Text(widget.onCaptured != null ? '保存して次へ' : 'この結果を確定'),
-                    ),
-                  ),
-                ],
-              ),
-
-              const SizedBox(height: 10),
-
-              SizedBox(
-                width: double.infinity,
-                height: 46,
-                child: ElevatedButton.icon(
-                  onPressed: _busy ? null : _captureAndOcr,
-                  icon: const Icon(Icons.document_scanner),
-                  label: const Text('撮影してOCR'),
-                ),
-              ),
-            ],
-          ),
-        ),
-      ),
+    return _GeminiCardResult(
+      text: (outJson['text'] ?? '') as String,
+      card: Map<String, dynamic>.from(outJson['card'] ?? {}),
+      corners: outJson['corners'] as Map<String, dynamic>?,
     );
   }
 
   @override
   Widget build(BuildContext context) {
-    final c = _controller;
-
     return Scaffold(
-      appBar: AppBar(
-        title: Text(widget.onCaptured != null ? 'OCRスキャン（連続）' : 'OCRスキャン'),
-        actions: [
-          IconButton(
-            onPressed: _busy
-                ? null
-                : () async {
-                    await _controller?.dispose();
-                    _controller = null;
-                    await _initCamera();
-                  },
-            icon: const Icon(Icons.refresh),
-            tooltip: 'カメラ再起動',
-          ),
-        ],
-      ),
-      body: Stack(
+      appBar: AppBar(title: const Text('名刺スキャン')),
+      backgroundColor: Colors.black,
+      body: Column(
         children: [
-          Container(color: Colors.black),
-
-          Positioned.fill(
-            child: SafeArea(
-              bottom: false,
-              child: _initializing
-                  ? const Center(child: CircularProgressIndicator())
-                  : (c == null || !c.value.isInitialized)
-                      ? Center(
-                          child: Text(
-                            _error.isNotEmpty ? _error : 'カメラを起動できませんでした',
-                            style: const TextStyle(color: Colors.white),
-                            textAlign: TextAlign.center,
-                          ),
-                        )
-                      : _buildPreview(c),
+          Expanded(
+            child: Container(
+              padding: const EdgeInsets.all(16),
+              child: _lastShot != null
+                  ? Image.file(File(_lastShot!.path), fit: BoxFit.contain)
+                  : const SizedBox.shrink(),
             ),
           ),
+          _buildBottomPanel(),
+        ],
+      ),
+    );
+  }
 
-          _buildBottomPanel(context),
+  Widget _buildBottomPanel() {
+    final hasResult = _plainText.isNotEmpty || _cardJson != null;
+    return Container(
+      height: MediaQuery.of(context).size.height * 0.42,
+      padding: const EdgeInsets.fromLTRB(20, 20, 20, 40),
+      decoration: const BoxDecoration(color: Colors.white, borderRadius: BorderRadius.vertical(top: Radius.circular(30))),
+      child: Column(
+        children: [
+          if (_busy) const LinearProgressIndicator(),
+          if (_error.isNotEmpty) Text(_error, style: const TextStyle(color: Colors.red, fontSize: 12)),
+          Expanded(
+            child: SingleChildScrollView(
+              child: Text(
+                hasResult ? "【解析結果】\n${const JsonEncoder.withIndent('  ').convert(_cardJson)}" : 'ここに結果が表示されます',
+                style: const TextStyle(fontSize: 13, color: Colors.black87, fontFamily: 'monospace'),
+              ),
+            ),
+          ),
+          const SizedBox(height: 16),
+          Row(
+            children: [
+              Expanded(child: OutlinedButton(onPressed: _busy ? null : () => setState(() => _lastShot = null), child: const Text('クリア'))),
+              const SizedBox(width: 10),
+              Expanded(child: ElevatedButton.icon(onPressed: (hasResult && !_busy) ? _saveAndNext : null, icon: const Icon(Icons.save), label: const Text('保存して次へ'))),
+            ],
+          ),
+          const SizedBox(height: 12),
+          SizedBox(width: double.infinity, height: 50, child: ElevatedButton.icon(onPressed: _busy ? null : _captureAndOcr, icon: const Icon(Icons.camera_alt), label: const Text('撮影してOCR'))),
         ],
       ),
     );

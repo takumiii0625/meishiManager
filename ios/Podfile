@@ -40,20 +40,13 @@ post_install do |installer|
   installer.pods_project.targets.each do |target|
     flutter_additional_ios_build_settings(target)
 
-    target.build_configurations.each do |config|
-      # permission_handler_apple の許可マクロ（使うものだけ 1 にする）
-      config.build_settings['GCC_PREPROCESSOR_DEFINITIONS'] ||= [
-        '$(inherited)',
-
-        # --- ここが重要 ---
-        'PERMISSION_CAMERA=1',
-      ]
-
-      config.build_settings['IPHONEOS_DEPLOYMENT_TARGET'] = '13.0'
-      config.build_settings['SWIFT_VERSION'] = '5.0'
-      # コンパイラが「警告をエラーとして扱わない」ように強制
-      config.build_settings['OTHER_SWIFT_FLAGS'] = '$(inherited) -suppress-warnings'
+    if target.name == 'WeScan'
+      target.build_configurations.each do |config|
+        # エラーが出ている古いプロパティを許容するため、Swiftのバージョンを5に固定
+        config.build_settings['SWIFT_VERSION'] = '5.0'
+        # 定義されていないプロパティへのアクセスを無視するフラグ（必要に応じて）
+        config.build_settings['OTHER_SWIFT_FLAGS'] = '$(inherited) -DWeScan_OLD'
+      end
     end
   end
 end
-
