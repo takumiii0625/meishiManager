@@ -60,3 +60,16 @@ app.*.map.json
 # iOS
 ios/Podfile.lock
 ios/Runner.xcodeproj/project.pbxproj
+ios/Pods/
+ios/Frameworks/
+ios/DerivedData/
+
+#Xcodeのキャッシュや自動生成ファイルをさらに除外
+ios/PROJECT@*
+ios/TARGET@*
+ios/.generated/
+/ios/build/
+*.pbxuser
+*.mode1v3
+*.mode2v3
+*.perspectivev3

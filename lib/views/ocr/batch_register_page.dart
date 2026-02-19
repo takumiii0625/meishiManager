@@ -99,6 +99,25 @@ class _BatchRegisterPageState extends State<BatchRegisterPage> {
               final name    = (data['name'] as String?) ?? (nameJa.isNotEmpty ? nameJa : nameEn);
 
               return ListTile(
+                // 左側に画像を表示
+                leading: Container(
+                  width: 50,
+                  height: 50,
+                  decoration: BoxDecoration(
+                    color: Colors.grey[200],
+                    borderRadius: BorderRadius.circular(4),
+                  ),
+                  clipBehavior: Clip.antiAlias,
+                  child: data['imageUrl'] != null && data['imageUrl'] != ''
+                      ? Image.network(
+                          data['imageUrl'],
+                          fit: BoxFit.cover,
+                          // 読み込み中のエラー対策
+                          errorBuilder: (context, error, stackTrace) =>
+                              const Icon(Icons.broken_image, size: 20),
+                        )
+                      : const Icon(Icons.credit_card, color: Colors.grey),
+                ),
                 title: Text(company.isNotEmpty ? company : '(会社名なし)'),
                 subtitle: Text([name, nameEn].where((e) => e.trim().isNotEmpty).join(' / ')),
               );
