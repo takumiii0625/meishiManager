@@ -1,5 +1,6 @@
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:google_sign_in/google_sign_in.dart';
 
 final firebaseAuthProvider = Provider<FirebaseAuth>((ref) {
   return FirebaseAuth.instance;
@@ -24,8 +25,8 @@ final anonymousSignInProvider = FutureProvider<User>((ref) async {
 });
 
 /// uid（ログイン済みのユーザー）
-/// - AuthGate で user==null を弾く前提なので、通常ここは必ず埋まる
-/// - ただしビルド中の一瞬でnullが来ても落ちないよう、空文字を返す
+/// Web: anonymousSignInを使わないのでauthStateChangesを直接参照
+/// モバイル: AuthGateでanonymousSignInを発火済みなのでそちらを利用
 final uidProvider = Provider<String>((ref) {
   final user = ref.watch(authStateChangesProvider).maybeWhen(
         data: (u) => u,
@@ -40,7 +41,7 @@ class EmailAuthParams {
   final String password;
 }
 
-/// 匿名ユーザーに Email/Password をリンクして “同じuidのまま昇格”
+/// 匿名ユーザーに Email/Password をリンクして "同じuidのまま昇格"
 final linkEmailProvider =
     FutureProvider.autoDispose.family<User, EmailAuthParams>((ref, params) async {
   final auth = ref.watch(firebaseAuthProvider);
@@ -88,4 +89,33 @@ final signInWithEmailProvider =
 final signOutProvider = FutureProvider.autoDispose<void>((ref) async {
   final auth = ref.watch(firebaseAuthProvider);
   await auth.signOut();
+});
+
+// ----------------------------------------------------------------
+// Google認証（Web対応）
+// ----------------------------------------------------------------
+
+final googleSignInProvider = Provider<GoogleSignIn>((ref) {
+  return GoogleSignIn();
+});
+
+/// Googleログイン
+final signInWithGoogleProvider =
+    FutureProvider.autoDispose<User>((ref) async {
+  final googleSignIn = ref.watch(googleSignInProvider);
+  final auth = ref.watch(firebaseAuthProvider);
+
+  final googleUser = await googleSignIn.signIn();
+  if (googleUser == null) throw StateError('Google sign-in was cancelled');
+
+  final googleAuth = await googleUser.authentication;
+  final credential = GoogleAuthProvider.credential(
+    accessToken: googleAuth.accessToken,
+    idToken: googleAuth.idToken,
+  );
+
+  final result = await auth.signInWithCredential(credential);
+  final user = result.user;
+  if (user == null) throw StateError('Google sign-in returned null user');
+  return user;
 });
