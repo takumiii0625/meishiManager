@@ -1,35 +1,17 @@
-// ============================================================
-// main.dart
-// アプリのエントリーポイント（一番最初に実行されるファイル）
-//
-// 【起動の流れ】
-//   1. WidgetsFlutterBinding.ensureInitialized()
-//      → Flutterのエンジンを初期化する（Firebaseより先に呼ぶ必要がある）
-//   2. Firebase.initializeApp()
-//      → Firebaseに接続する（Firestore・Auth・Storageが使えるようになる）
-//   3. runApp()
-//      → 画面の描画を開始する
-//
-// 【ProviderScope とは？】
-//   Riverpod の状態管理を使うために、アプリ全体を ProviderScope で包む。
-//   これがないと ref.watch() などが使えない。
-//
-// 【kIsWeb による画面振り分け】
-//   kIsWeb = Flutter が Web として動いているかどうかを判定する定数
-//   Web（管理者用）→ AdminLoginPage（管理者ログイン画面）
-//   スマホ（一般ユーザー用）→ AuthGate（通常のログイン処理）
-// ============================================================
-
-import 'package:flutter/foundation.dart'; // kIsWeb を使うために必要
+import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:firebase_core/firebase_core.dart';
 
 import 'firebase_options.dart';
 import 'auth_gate.dart';
-import 'views/admin/admin_login_page.dart';
+import 'providers/auth_providers.dart';
+import 'views/auth/admin_login_page.dart';
+import 'views/auth/web_auth_page.dart';
 import 'views/admin/admin_dashboard_page.dart';
 import 'views/admin/admin_users_page.dart';
+import 'views/cards/web_cards_page.dart';
 
 /// アプリのエントリーポイント
 /// async = 非同期処理（Firebaseの初期化が終わってから次へ進む）
@@ -52,20 +34,73 @@ Future<void> main() async {
 class MyApp extends StatelessWidget {
   const MyApp({super.key});
 
-
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
       title: 'Meishi Manager',
-      // kIsWeb = true（Web）→ 管理者ログイン画面
-      // kIsWeb = false（スマホ）→ 通常の AuthGate
-      home: kIsWeb ? const AdminLoginPage() : const AuthGate(),
-      // admin系画面へのルート定義
-      // Navigator.pushNamed(context, '/admin/dashboard') のように使う
+      home: kIsWeb ? const WebRootPage() : const AuthGate(),
       routes: {
+        '/login':           (context) => const WebAuthPage(),
         '/admin/login':     (context) => const AdminLoginPage(),
         '/admin/dashboard': (context) => const AdminDashboardPage(),
         '/admin/users':     (context) => const AdminUsersPage(),
+        '/home':            (context) => kIsWeb ? const WebRootPage() : const AuthGate(),
+      },
+    );
+  }
+}
+
+// ----------------------------------------------------------------
+// Webの起点：ログイン状態とroleで振り分け
+// ----------------------------------------------------------------
+class WebRootPage extends ConsumerWidget {
+  const WebRootPage({super.key});
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final authState = ref.watch(authStateChangesProvider);
+    return authState.when(
+      loading: () => const Scaffold(
+        body: Center(child: CircularProgressIndicator()),
+      ),
+      error: (_, __) => const WebAuthPage(),
+      data: (user) {
+        if (user == null) return const WebAuthPage();
+        return _RoleRouter(uid: user.uid);
+      },
+    );
+  }
+}
+
+// ----------------------------------------------------------------
+// roleを確認してルーティング
+// ----------------------------------------------------------------
+class _RoleRouter extends StatelessWidget {
+  const _RoleRouter({required this.uid});
+  final String uid;
+
+  @override
+  Widget build(BuildContext context) {
+    return FutureBuilder<DocumentSnapshot>(
+      future: FirebaseFirestore.instance
+          .collection('users')
+          .doc(uid)
+          .get(),
+      builder: (context, snapshot) {
+        if (snapshot.connectionState == ConnectionState.waiting) {
+          return const Scaffold(
+            body: Center(child: CircularProgressIndicator()),
+          );
+        }
+
+        if (snapshot.hasData && snapshot.data!.exists) {
+          final data = snapshot.data!.data() as Map<String, dynamic>;
+          final role = data['role'] as String? ?? 'user';
+          if (role == 'admin') {
+            return const AdminDashboardPage();
+          }
+        }
+        return const WebCardsPage();
       },
     );
   }

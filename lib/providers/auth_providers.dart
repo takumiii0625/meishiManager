@@ -14,6 +14,7 @@
 
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:google_sign_in/google_sign_in.dart';
 
 /// FirebaseAuth のインスタンスを提供する Provider
 ///
@@ -52,12 +53,9 @@ final anonymousSignInProvider = FutureProvider<User>((ref) async {
   return user;
 });
 
-/// 現在のユーザーの uid（ユーザーID）を提供する Provider
-///
-/// uid = Firebase Auth が自動で割り当てる一意な文字列
-///       Firestore の保存先パス（/users/{uid}/cards）にも使われる
-/// AuthGate で user==null を弾く前提なので、通常ここは必ず埋まる。
-/// ただしビルド中の一瞬でnullが来ても落ちないよう、空文字を返す。
+/// uid（ログイン済みのユーザー）
+/// Web: anonymousSignInを使わないのでauthStateChangesを直接参照
+/// モバイル: AuthGateでanonymousSignInを発火済みなのでそちらを利用
 final uidProvider = Provider<String>((ref) {
   // maybeWhen = data の場合だけ値を取り出し、それ以外は orElse を返す
   final user = ref.watch(authStateChangesProvider).maybeWhen(
@@ -140,4 +138,33 @@ final signInWithEmailProvider =
 final signOutProvider = FutureProvider.autoDispose<void>((ref) async {
   final auth = ref.watch(firebaseAuthProvider);
   await auth.signOut();
+});
+
+// ----------------------------------------------------------------
+// Google認証（Web対応）
+// ----------------------------------------------------------------
+
+final googleSignInProvider = Provider<GoogleSignIn>((ref) {
+  return GoogleSignIn();
+});
+
+/// Googleログイン
+final signInWithGoogleProvider =
+    FutureProvider.autoDispose<User>((ref) async {
+  final googleSignIn = ref.watch(googleSignInProvider);
+  final auth = ref.watch(firebaseAuthProvider);
+
+  final googleUser = await googleSignIn.signIn();
+  if (googleUser == null) throw StateError('Google sign-in was cancelled');
+
+  final googleAuth = await googleUser.authentication;
+  final credential = GoogleAuthProvider.credential(
+    accessToken: googleAuth.accessToken,
+    idToken: googleAuth.idToken,
+  );
+
+  final result = await auth.signInWithCredential(credential);
+  final user = result.user;
+  if (user == null) throw StateError('Google sign-in returned null user');
+  return user;
 });
