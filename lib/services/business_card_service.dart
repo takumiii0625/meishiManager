@@ -1,7 +1,23 @@
-import 'dart:io';
+// lib/services/business_card_service.dart
+//
+// 【このファイルの役割】
+//   1. 画像をFirebase Storageにアップロードする
+//   2. Geminiの解析結果をFirestoreに保存する
+//
+// 【department / jobLevel の扱い】
+//   部署（department）＞役職（jobLevel）の優先度で保存・表示する。
+//   役職がない名刺でも部署があれば所属がわかる設計。
+//   両方ある場合は両方保存する。
+//
+// 【表裏の画像保存について】
+//   ファイル名に front_ / back_ プレフィックスをつけて確実に区別する。
+//   以前は並列アップロード（Future.wait）でタイムスタンプが衝突するリスクがあったため
+//   直列アップロードに変更した。
+
 import 'package:firebase_storage/firebase_storage.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
+import 'image_compress_service.dart';
 
 class BusinessCardService {
   final FirebaseFirestore _db = FirebaseFirestore.instance;
@@ -14,26 +30,22 @@ class BusinessCardService {
     return '';
   }
 
-  Future<String> addCard({
-    required Map<String, dynamic> card,
-    required String rawText,
-    String? imagePath,
-  }) async {
+  // ─────────────────────────────────────────────────────────
+  // 画像をFirebase StorageにアップロードしてダウンロードURLを返す
+  //
+  // [prefix] : 'front' or 'back' をファイル名に含めて表裏を区別する
+  // ─────────────────────────────────────────────────────────
+  Future<String?> uploadImage(String imagePath, {String prefix = 'card'}) async {
     final user = FirebaseAuth.instance.currentUser;
-    if (user == null) {
-      throw Exception('ログイン情報がありません');
-    }
+    if (user == null) return null;
 
-    String? imageUrl;
-
-    //Storageへのアップロード
-    if (imagePath != null && imagePath.isNotEmpty) {
     try {
-      final file = File(imagePath);
-      // 保存するファイル名を決める（重複しないように時間を使う）
-      final fileName = '${DateTime.now().millisecondsSinceEpoch}.jpg';
-      
-      // Storageの参照を作成
+      final compressed = await ImageCompressService.compressForUpload(imagePath);
+
+      // ★ prefix（front/back）をつけてファイル名を区別する
+      // 例: front_1234567890.jpg / back_1234567890.jpg
+      final fileName = '${prefix}_${DateTime.now().millisecondsSinceEpoch}.jpg';
+
       final storageRef = FirebaseStorage.instance
           .ref()
           .child('users')
@@ -41,68 +53,96 @@ class BusinessCardService {
           .child('cards')
           .child(fileName);
 
-      // ファイルをアップロード
-      await storageRef.putFile(file);
+      await storageRef.putFile(
+        compressed,
+        SettableMetadata(contentType: 'image/jpeg'),
+      );
 
-      // 公開URLを取得
-      imageUrl = await storageRef.getDownloadURL();
+      return await storageRef.getDownloadURL();
     } catch (e) {
       print('Storageアップロード失敗: $e');
-      // 画像アップロードに失敗してもデータ登録は進めるなら何もしない
+      return null;
     }
   }
 
-    final colRef = _db.collection('users').doc(user.uid).collection('cards');
+  // ─────────────────────────────────────────────────────────
+  // 名刺データをFirestoreに保存する
+  // ─────────────────────────────────────────────────────────
+  Future<String> addCard({
+    required Map<String, dynamic> card,
+    required String rawText,
+    String? frontImagePath,
+    String? backImagePath,
+  }) async {
+    final user = FirebaseAuth.instance.currentUser;
+    if (user == null) throw Exception('ログイン情報がありません');
 
-    // --- Gemini card から取り出し（null-safe）---
-    final company = (card['company'] as String?) ?? '';
-    final nameJa = (card['name_ja'] as String?) ?? '';
-    final nameEn = (card['name_en'] as String?) ?? '';
-    final name = nameJa.isNotEmpty ? nameJa : nameEn;
+    // ★ 直列アップロードに変更（並列だとタイムスタンプが衝突する可能性あり）
+    //   表面 → 裏面の順で1枚ずつアップロードして確実に区別する
+    final frontImageUrl = (frontImagePath != null && frontImagePath.isNotEmpty)
+        ? await uploadImage(frontImagePath, prefix: 'front') ?? ''
+        : '';
 
-    final phone = _joinList(card['phone']); // ← 配列対応
-    final email = _joinList(card['email']);
-    final url = _joinList(card['url']);
+    final backImageUrl = (backImagePath != null && backImagePath.isNotEmpty)
+        ? await uploadImage(backImagePath, prefix: 'back') ?? ''
+        : '';
 
+    // ── Geminiの解析結果から各フィールドを取り出す ────────
+    final company    = (card['company']     as String?) ?? '';
+    final nameJa     = (card['name_ja']     as String?) ?? '';
+    final nameEn     = (card['name_en']     as String?) ?? '';
+    final postal     = (card['postal_code'] as String?) ?? '';
+    final address    = (card['address']     as String?) ?? '';
+    final name       = nameJa.isNotEmpty ? nameJa : nameEn;
+    final phone      = _joinList(card['phone']);
+    final email      = _joinList(card['email']);
+    final url        = _joinList(card['url']);
+    final prefecture = (card['prefecture']  as String?) ?? '';
+
+    // 部署：Geminiの department フィールドをそのまま使う
     final department = (card['department'] as String?) ?? '';
-    final title = (card['title'] as String?) ?? '';
-    final postal = (card['postal_code'] as String?) ?? '';
-    final address = (card['address'] as String?) ?? '';
 
-    // notes に寄せる（CardModelが notes を持ってるので活用）
+    // 役職：Geminiの title フィールドをそのまま使う（正規化しない）
+    final jobLevel   = (card['title'] as String?) ?? '';
+
+    final industryRaw = (card['industry']             as String?) ?? '';
+    final candidates  = (card['industry_candidates']  as List?)   ?? [];
+
+    // メモ欄：郵便番号・URLのみ（部署・役職は専用フィールドで管理）
     final notesParts = <String>[];
-    if (department.isNotEmpty) notesParts.add('部署: $department');
-    if (title.isNotEmpty) notesParts.add('役職: $title');
     if (postal.isNotEmpty) notesParts.add('〒$postal');
-    if (address.isNotEmpty) notesParts.add(address);
-    if (url.isNotEmpty) notesParts.add('URL: $url');
+    if (url.isNotEmpty)    notesParts.add('URL: $url');
     final notes = notesParts.join('\n');
 
     final now = FieldValue.serverTimestamp();
 
     final doc = <String, dynamic>{
-      'uid': user.uid,
-
-      // ✅ CardModel.requiredに合わせたフラット（ここが自動入力になる）
-      'name': name,
-      'company': company,
-      'industry': '',
-      'phone': phone,
-      'email': email,
-      'notes': notes,
-      'imageUrl': imageUrl ?? '',
-
-      'rawText': rawText,
-      'status': 'pending_industry',
+      'uid':        user.uid,
+      'name':       name,
+      'company':    company,
+      'phone':      phone,
+      'email':      email,
+      'address':    address,
+      'prefecture': prefecture,
+      'department': department,
+      'jobLevel':   jobLevel,
+      'industry':           industryRaw,
+      'industryCandidates': candidates,
+      'tags':       <String>[],
+      'notes':      notes,
+      // ★ frontImageUrl と backImageUrl を明確に区別して保存
+      'frontImageUrl': frontImageUrl, // 表面（front_ プレフィックスのファイル）
+      'backImageUrl':  backImageUrl,  // 裏面（back_ プレフィックスのファイル）
+      'rawText':       rawText,
+      'isDeleted': false,
+      'deletedAt': null,
+      'status':    'pending_industry',
       'createdAt': now,
       'updatedAt': now,
-
-      // ✅ 生データ（詳細画面/将来の再解析用）
-      'card': card,
-      'imagePath': imagePath,
+      '_rawCard':  card,
     };
 
-  final ref = await _db
+    final ref = await _db
         .collection('users')
         .doc(user.uid)
         .collection('cards')

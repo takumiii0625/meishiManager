@@ -1,25 +1,54 @@
+// ============================================================
+// auth_providers.dart
+// Firebase Auth に関する Riverpod Provider をまとめたファイル
+//
+// 【このファイルの役割】
+//   ログイン・ログアウト・ユーザー情報取得に使う Provider を定義する。
+//   画面からは ref.watch(uidProvider) のように呼ぶだけで使える。
+//
+// 【Provider の種類（復習）】
+//   Provider        = 変化しない値を提供する（FirebaseAuth インスタンスなど）
+//   StreamProvider  = リアルタイムで変化する値を監視する（ログイン状態など）
+//   FutureProvider  = 非同期処理を1回実行する（ログイン・ログアウトなど）
+// ============================================================
+
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:google_sign_in/google_sign_in.dart';
 
+/// FirebaseAuth のインスタンスを提供する Provider
+///
+/// FirebaseAuth.instance を直接呼ぶのではなく、
+/// Provider 経由にすることでテスト時に差し替えがしやすくなる。
 final firebaseAuthProvider = Provider<FirebaseAuth>((ref) {
   return FirebaseAuth.instance;
 });
 
-/// ログイン状態の監視
+/// Firebase Auth のログイン状態をリアルタイムで監視する Provider
+///
+/// authStateChanges() = ログイン・ログアウトが起きるたびに新しい値を流す Stream
+/// User? = ログイン中は User オブジェクト、未ログインは null
 final authStateChangesProvider = StreamProvider<User?>((ref) {
   return ref.watch(firebaseAuthProvider).authStateChanges();
 });
 
-/// 匿名ログイン（未ログインなら匿名で入る）
+/// 匿名ログインを実行する Provider
+///
+/// 【匿名ログインとは？】
+///   メールアドレスやパスワードなしで Firebase Auth にログインする方法。
+///   ユーザーが意識せずにアプリを使い始められる。
+///   すでにログイン済みなら何もせずに現在のユーザーを返す。
 final anonymousSignInProvider = FutureProvider<User>((ref) async {
   final auth = ref.watch(firebaseAuthProvider);
 
+  // すでにログイン済みなら、そのユーザーをそのまま返す（再ログイン不要）
   final current = auth.currentUser;
   if (current != null) return current;
 
+  // 未ログインなら匿名ログインを実行
   final cred = await auth.signInAnonymously();
   final user = cred.user;
+  // user が null になることはないはずだが、念のためエラーを投げる
   if (user == null) throw StateError('Anonymous sign-in returned null user');
   return user;
 });
@@ -28,38 +57,58 @@ final anonymousSignInProvider = FutureProvider<User>((ref) async {
 /// Web: anonymousSignInを使わないのでauthStateChangesを直接参照
 /// モバイル: AuthGateでanonymousSignInを発火済みなのでそちらを利用
 final uidProvider = Provider<String>((ref) {
+  // maybeWhen = data の場合だけ値を取り出し、それ以外は orElse を返す
   final user = ref.watch(authStateChangesProvider).maybeWhen(
         data: (u) => u,
         orElse: () => null,
       );
+  // user が null（未ログイン）なら空文字を返す
   return user?.uid ?? '';
 });
 
+/// メール認証用のパラメータをまとめたクラス
+///
+/// FutureProvider.family には引数を1つしか渡せないため、
+/// 複数の引数（email と password）をこのクラスにまとめて渡す。
 class EmailAuthParams {
   EmailAuthParams({required this.email, required this.password});
   final String email;
   final String password;
 }
 
-/// 匿名ユーザーに Email/Password をリンクして "同じuidのまま昇格"
+/// 匿名ユーザーにメール/パスワードをリンクして「昇格」する Provider
+///
+/// 【昇格とは？】
+///   匿名ユーザーのまま使っていたデータを、
+///   メールアドレスと紐づけることで「正規ユーザー」にすること。
+///   uid は変わらないので、今まで登録した名刺がそのまま使える。
+///
+/// autoDispose = 画面が閉じたら自動でリセットされる
+/// family = 引数（EmailAuthParams）を受け取れる
 final linkEmailProvider =
     FutureProvider.autoDispose.family<User, EmailAuthParams>((ref, params) async {
   final auth = ref.watch(firebaseAuthProvider);
   final user = auth.currentUser;
   if (user == null) throw StateError('No current user');
 
+  // EmailAuthProvider.credential = メール認証情報を作成
   final credential = EmailAuthProvider.credential(
-    email: params.email.trim(),
+    email: params.email.trim(), // trim() = 前後の空白を除去
     password: params.password,
   );
 
+  // linkWithCredential = 匿名ユーザーにメール認証を紐づける
   final result = await user.linkWithCredential(credential);
   final linked = result.user;
   if (linked == null) throw StateError('linkWithCredential returned null user');
   return linked;
 });
 
-/// Email/Password 新規登録（新しいuidになる）
+/// メール/パスワードで新規登録する Provider
+///
+/// 注意: 新規登録すると新しい uid が発行される。
+///       匿名ユーザーとは別のアカウントになる。
+///       既存データを引き継ぐには linkEmailProvider を使うこと。
 final signUpWithEmailProvider =
     FutureProvider.autoDispose.family<User, EmailAuthParams>((ref, params) async {
   final auth = ref.watch(firebaseAuthProvider);
@@ -72,7 +121,7 @@ final signUpWithEmailProvider =
   return user;
 });
 
-/// Email/Password ログイン
+/// メール/パスワードでログインする Provider
 final signInWithEmailProvider =
     FutureProvider.autoDispose.family<User, EmailAuthParams>((ref, params) async {
   final auth = ref.watch(firebaseAuthProvider);
@@ -85,7 +134,7 @@ final signInWithEmailProvider =
   return user;
 });
 
-/// ログアウト
+/// ログアウトする Provider
 final signOutProvider = FutureProvider.autoDispose<void>((ref) async {
   final auth = ref.watch(firebaseAuthProvider);
   await auth.signOut();

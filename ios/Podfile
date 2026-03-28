@@ -40,13 +40,10 @@ post_install do |installer|
   installer.pods_project.targets.each do |target|
     flutter_additional_ios_build_settings(target)
 
-    if target.name == 'WeScan'
-      target.build_configurations.each do |config|
-        # エラーが出ている古いプロパティを許容するため、Swiftのバージョンを5に固定
-        config.build_settings['SWIFT_VERSION'] = '5.0'
-        # 定義されていないプロパティへのアクセスを無視するフラグ（必要に応じて）
-        config.build_settings['OTHER_SWIFT_FLAGS'] = '$(inherited) -DWeScan_OLD'
-      end
+    # cunning_document_scanner のカメラ権限を有効化
+    target.build_configurations.each do |config|
+      config.build_settings['GCC_PREPROCESSOR_DEFINITIONS'] ||= ['$(inherited)']
+      config.build_settings['GCC_PREPROCESSOR_DEFINITIONS'] << 'PERMISSION_CAMERA=1'
     end
   end
 end

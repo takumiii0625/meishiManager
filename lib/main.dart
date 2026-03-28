@@ -13,14 +13,24 @@ import 'views/admin/admin_dashboard_page.dart';
 import 'views/admin/admin_users_page.dart';
 import 'views/cards/web_cards_page.dart';
 
+/// アプリのエントリーポイント
+/// async = 非同期処理（Firebaseの初期化が終わってから次へ進む）
 Future<void> main() async {
+  // Flutterエンジンの初期化（非同期処理を使う前に必ず呼ぶ）
   WidgetsFlutterBinding.ensureInitialized();
+
+  // Firebaseを初期化（firebase_options.dart に設定値が入っている）
   await Firebase.initializeApp(
     options: DefaultFirebaseOptions.currentPlatform,
   );
+
+  // アプリを起動
+  // ProviderScope = Riverpodの状態管理をアプリ全体で使えるようにするラッパー
   runApp(const ProviderScope(child: MyApp()));
 }
 
+/// アプリのルートWidget
+/// StatelessWidget = 内部に状態を持たないシンプルなWidget
 class MyApp extends StatelessWidget {
   const MyApp({super.key});
 

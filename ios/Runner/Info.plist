@@ -45,9 +45,9 @@
 	<true/>
 	<key>UIApplicationSupportsIndirectInputEvents</key>
 	<true/>
-<key>NSCameraUsageDescription</key>
-<string>名刺をスキャンするためにカメラを使用します。</string>
-<key>NSPhotoLibraryUsageDescription</key>
-<string>名刺画像を選択するためにライブラリを使用します。</string>
+	<key>NSCameraUsageDescription</key>
+	<string>名刺をスキャンするためにカメラを使用します。</string>
+	<key>NSPhotoLibraryUsageDescription</key>
+	<string>名刺画像を選択するためにライブラリを使用します。</string>
 </dict>
 </plist>
