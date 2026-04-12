@@ -15,8 +15,11 @@
 
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:url_launcher/url_launcher.dart';
 import '../../models/card_model.dart';
 import '../../providers/card_providers.dart';
+import '../../services/mail_app_service.dart';
+import '../../widgets/card_image.dart';
 import 'card_edit_page.dart';
 
 class CardDetailPage extends ConsumerWidget {
@@ -136,16 +139,12 @@ class _DetailContent extends ConsumerWidget {
                       icon: Icons.location_on_outlined,
                       label: '地域',
                       value: card.prefecture),
+                // 電話行はタップで電話発信
                 if (card.phone.isNotEmpty)
-                  _InfoRow(
-                      icon: Icons.phone_outlined,
-                      label: '電話',
-                      value: card.phone),
+                  _PhoneRow(phone: card.phone),
+                // メール行はタップでメールアプリが開く
                 if (card.email.isNotEmpty)
-                  _InfoRow(
-                      icon: Icons.email_outlined,
-                      label: 'メール',
-                      value: card.email),
+                  _EmailRow(email: card.email),
                 if (card.address.isNotEmpty)
                   _InfoRow(
                       icon: Icons.map_outlined,
@@ -240,16 +239,16 @@ class _ImageSectionState extends State<_ImageSection> {
             borderRadius: BorderRadius.circular(8),
             child: ConstrainedBox(
               constraints: const BoxConstraints(
-                maxHeight: 280, // 縦名刺でもはみ出さないよう制限
+                maxHeight: 280,
                 maxWidth: double.infinity,
               ),
-              child: url.isNotEmpty
-                  ? Image.network(
-                      url,
-                      fit: BoxFit.contain, // 元の縦横比を維持して表示
-                      errorBuilder: (_, __, ___) => _noImage(),
-                    )
-                  : _noImage(),
+              child: CardImage(
+                url: url,
+                height: 280,
+                fit: BoxFit.contain,
+                placeholderIcon: Icons.credit_card,
+                iconSize: 40,
+              ),
             ),
           ),
           // 表面/裏面の切り替えボタン（両方ある場合のみ表示）
@@ -284,16 +283,6 @@ class _ImageSectionState extends State<_ImageSection> {
       ),
     );
   }
-
-  // 画像がない場合のプレースホルダー
-  Widget _noImage() => Container(
-        height: 120,
-        color: const Color(0xFFE2E8F0),
-        child: const Center(
-          child: Icon(Icons.image_not_supported_outlined,
-              color: Color(0xFF94A3B8), size: 40),
-        ),
-      );
 }
 
 // ── 情報の1行（アイコン・ラベル・値）────────────────────────
@@ -325,6 +314,219 @@ class _InfoRow extends StatelessWidget {
                     fontSize: 13, color: Color(0xFF1E293B))),
           ),
         ],
+      ),
+    );
+  }
+}
+
+// ── 電話行（タップで電話発信）──────────────────────
+class _PhoneRow extends StatelessWidget {
+  final String phone;
+  const _PhoneRow({required this.phone});
+
+  /// 電話番号を「/」「,」「・」「\n」で分割して返す
+  List<String> _parsePhoneNumbers() {
+    return phone
+        .split(RegExp(r'[/,・\n]')) // 区切り文字で分割
+        .map((n) => n.trim())       // 前後の空白を除去
+        .where((n) => n.isNotEmpty) // 空文字を除外
+        .toList();
+  }
+
+  /// 電話発信を起動する
+  /// 番号が1つなら直接発信、複数なら選択ダイアログを出す
+  Future<void> _launchPhone(BuildContext context) async {
+    final numbers = _parsePhoneNumbers();
+    if (numbers.isEmpty) return;
+
+    if (numbers.length == 1) {
+      // 1つなら直接発信
+      await _call(numbers.first);
+    } else {
+      // 複数なら選択ダイアログを出す
+      await showDialog(
+        context: context,
+        builder: (dialogContext) => AlertDialog(
+          title: const Text('電話番号を選択'),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: numbers.map((number) => ListTile(
+              leading: const Icon(Icons.call, color: Color(0xFF1E40AF)),
+              title: Text(number,
+                  style: const TextStyle(
+                      fontSize: 15, color: Color(0xFF1E40AF))),
+              onTap: () async {
+                Navigator.pop(dialogContext);
+                await _call(number);
+              },
+            )).toList(),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(dialogContext),
+              child: const Text('キャンセル'),
+            ),
+          ],
+        ),
+      );
+    }
+  }
+
+  /// 実際に電話発信する
+  Future<void> _call(String number) async {
+    // ハイフン・スペース・括弧を除去してクリーンな番号に変換
+    final cleaned = number.replaceAll(RegExp(r'[\s\-\(\)]'), '');
+    final uri = Uri(scheme: 'tel', path: cleaned);
+    if (await canLaunchUrl(uri)) {
+      await launchUrl(uri);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return InkWell(
+      onTap: () => _launchPhone(context),
+      borderRadius: BorderRadius.circular(4),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(vertical: 8),
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Icon(Icons.phone_outlined,
+                size: 18, color: Color(0xFF94A3B8)),
+            const SizedBox(width: 8),
+            const SizedBox(
+              width: 56,
+              child: Text('電話',
+                  style: TextStyle(
+                      fontSize: 12, color: Color(0xFF94A3B8))),
+            ),
+            Expanded(
+              child: Row(
+                children: [
+                  Expanded(
+                    child: Text(
+                      phone,
+                      style: const TextStyle(
+                        fontSize: 13,
+                        color: Color(0xFF1E40AF), // リンクの青色
+                        decoration: TextDecoration.underline,
+                      ),
+                    ),
+                  ),
+                  // 電話アイコン（タップできることを示す）
+                  const Icon(Icons.call,
+                      size: 14, color: Color(0xFF94A3B8)),
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+// ── メール行（タップでメールアプリ起動）─────────────────────
+// ConsumerWidgetに変更して、設定したメールアプリを使う
+class _EmailRow extends ConsumerWidget {
+  final String email;
+  const _EmailRow({required this.email});
+
+  /// メールアドレスを「/」「,」「・」「\n」で分割して返す
+  List<String> _parseEmails() {
+    return email
+        .split(RegExp(r'[/,・\n]'))
+        .map((e) => e.trim())
+        .where((e) => e.isNotEmpty)
+        .toList();
+  }
+
+  /// メールアプリを起動する
+  /// アドレスが1つなら直接起動、複数なら選択ダイアログを出す
+  Future<void> _launchEmail(BuildContext context, WidgetRef ref) async {
+    final emails = _parseEmails();
+    if (emails.isEmpty) return;
+
+    // 設定されたメールアプリを取得
+    final selectedApp = ref.read(selectedMailAppProvider).maybeWhen(
+      data: (app) => app,
+      orElse: () => kMailApps.first, // デフォルト
+    );
+
+    if (emails.length == 1) {
+      await launchMailApp(selectedApp, emails.first);
+    } else {
+      // 複数なら選択ダイアログを出す
+      await showDialog(
+        context: context,
+        builder: (dialogContext) => AlertDialog(
+          title: const Text('メールアドレスを選択'),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: emails.map((address) => ListTile(
+              leading: const Icon(Icons.email_outlined,
+                  color: Color(0xFF1E40AF)),
+              title: Text(address,
+                  style: const TextStyle(
+                      fontSize: 14, color: Color(0xFF1E40AF))),
+              onTap: () async {
+                Navigator.pop(dialogContext);
+                await launchMailApp(selectedApp, address);
+              },
+            )).toList(),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(dialogContext),
+              child: const Text('キャンセル'),
+            ),
+          ],
+        ),
+      );
+    }
+  }
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    return InkWell(
+      onTap: () => _launchEmail(context, ref),
+      borderRadius: BorderRadius.circular(4),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(vertical: 8),
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Icon(Icons.email_outlined,
+                size: 18, color: Color(0xFF94A3B8)),
+            const SizedBox(width: 8),
+            const SizedBox(
+              width: 56,
+              child: Text('メール',
+                  style: TextStyle(
+                      fontSize: 12, color: Color(0xFF94A3B8))),
+            ),
+            Expanded(
+              child: Row(
+                children: [
+                  Expanded(
+                    child: Text(
+                      email,
+                      style: const TextStyle(
+                        fontSize: 13,
+                        color: Color(0xFF1E40AF), // リンクの青色
+                        decoration: TextDecoration.underline,
+                      ),
+                    ),
+                  ),
+                  // メールアイコン（タップできることを示す）
+                  const Icon(Icons.open_in_new,
+                      size: 14, color: Color(0xFF94A3B8)),
+                ],
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }

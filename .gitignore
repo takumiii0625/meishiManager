@@ -57,6 +57,27 @@ app.*.map.json
 # VSCode settings
 .vscode/settings.json
 
+# ローカル引き継ぎ・メモ・作業ドキュメント（Gitに上げない）
+HANDOVER.md
+TODO.md
+MEMO.md
+NOTES.md
+SCRATCH.md
+*.local.md
+
+# 環境変数・シークレット系（絶対にGitに上げない）
+.env
+.env.local
+.env.*.local
+secrets.json
+google-services.json
+GoogleService-Info.plist
+gemini_key.txt
+
+# AI/Claude関連の一時メモ
+.claude/
+CLAUDE_CONTEXT.md
+
 # iOS
 ios/Podfile.lock
 ios/Runner.xcodeproj/project.pbxproj

@@ -21,20 +21,23 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../models/card_model.dart';
 import '../../providers/card_providers.dart';
+import '../../widgets/card_image.dart';
 import 'card_detail_page.dart';
 import '../ocr/multi_scan_page.dart';
 
 // ── フィルター状態 ─────────────────────────────────────────
 class _FilterState {
   final String jobLevel;    // 役職フィルター
-  final String department;  // ★ 部署フィルター（新規追加）
+  final String department;  // 部署フィルター
   final String prefecture;  // 地域フィルター
+  final String industry;    // ★ 業種フィルター（新規追加）
   final bool sortNewest;
 
   const _FilterState({
     this.jobLevel = '',
     this.department = '',
     this.prefecture = '',
+    this.industry = '',
     this.sortNewest = true,
   });
 
@@ -42,12 +45,14 @@ class _FilterState {
     String? jobLevel,
     String? department,
     String? prefecture,
+    String? industry,
     bool? sortNewest,
   }) =>
       _FilterState(
         jobLevel:   jobLevel   ?? this.jobLevel,
         department: department ?? this.department,
         prefecture: prefecture ?? this.prefecture,
+        industry:   industry   ?? this.industry,
         sortNewest: sortNewest ?? this.sortNewest,
       );
 }
@@ -58,12 +63,16 @@ class _FilterNotifier extends StateNotifier<_FilterState> {
   void setJobLevel(String v) =>
       state = state.copyWith(jobLevel: state.jobLevel == v ? '' : v);
 
-  // ★ 部署フィルターをセット（同じ値を再タップしたら解除）
+  // 部署フィルターをセット（同じ値を再タップしたら解除）
   void setDepartment(String v) =>
       state = state.copyWith(department: state.department == v ? '' : v);
 
   void setPrefecture(String v) =>
       state = state.copyWith(prefecture: state.prefecture == v ? '' : v);
+
+  // ★ 業種フィルターをセット（同じ値を再タップしたら解除）
+  void setIndustry(String v) =>
+      state = state.copyWith(industry: state.industry == v ? '' : v);
 
   void toggleSort() =>
       state = state.copyWith(sortNewest: !state.sortNewest);
@@ -201,6 +210,12 @@ class _CardsPageState extends ConsumerState<CardsPage>
               .where((j) => j.isNotEmpty)
               .toSet().toList()..sort();
 
+          // ★ 業種リスト（実データから動的生成）
+          final industries = cards
+              .map((c) => c.industry)
+              .where((i) => i.isNotEmpty)
+              .toSet().toList()..sort();
+
           return Column(
             children: [
               _SubFilterBar(
@@ -209,11 +224,13 @@ class _CardsPageState extends ConsumerState<CardsPage>
                 prefectures: prefectures,
                 departments: departments,
                 jobLevels: jobLevels,
+                industries: industries, // ★ 業種リストを渡す
               ),
               // フィルター適用中バナー
               if (filter.jobLevel.isNotEmpty ||
                   filter.department.isNotEmpty ||
-                  filter.prefecture.isNotEmpty)
+                  filter.prefecture.isNotEmpty ||
+                  filter.industry.isNotEmpty) // ★ 業種もバナー表示対象に
                 _ActiveFilterBanner(filter: filter, notifier: notifier),
               Expanded(
                 child: TabBarView(
@@ -236,7 +253,8 @@ class _CardsPageState extends ConsumerState<CardsPage>
         tooltip: '名刺を追加',
         onPressed: () => Navigator.of(context).push(
           MaterialPageRoute(
-            builder: (_) => const MultiScanPage(maxBatchSize: 5),
+            // maxBatchSize は省略 → デフォルトの10枚が使われる
+            builder: (_) => const MultiScanPage(),
           ),
         ),
         child: const Icon(Icons.add),
@@ -250,12 +268,15 @@ class _CardsPageState extends ConsumerState<CardsPage>
     if (filter.jobLevel.isNotEmpty) {
       result = result.where((c) => c.jobLevel == filter.jobLevel).toList();
     }
-    // ★ 部署フィルター追加
     if (filter.department.isNotEmpty) {
       result = result.where((c) => c.department == filter.department).toList();
     }
     if (filter.prefecture.isNotEmpty) {
       result = result.where((c) => c.prefecture == filter.prefecture).toList();
+    }
+    // ★ 業種フィルター追加
+    if (filter.industry.isNotEmpty) {
+      result = result.where((c) => c.industry == filter.industry).toList();
     }
     result.sort((a, b) => filter.sortNewest
         ? b.createdAt.compareTo(a.createdAt)
@@ -269,8 +290,9 @@ class _SubFilterBar extends StatelessWidget {
   final _FilterState filter;
   final _FilterNotifier notifier;
   final List<String> prefectures;
-  final List<String> departments; // ★ 部署リスト
+  final List<String> departments;
   final List<String> jobLevels;
+  final List<String> industries; // ★ 業種リスト
 
   const _SubFilterBar({
     required this.filter,
@@ -278,6 +300,7 @@ class _SubFilterBar extends StatelessWidget {
     required this.prefectures,
     required this.departments,
     required this.jobLevels,
+    required this.industries, // ★
   });
 
   @override
@@ -307,7 +330,7 @@ class _SubFilterBar extends StatelessWidget {
               onSelected: notifier.setPrefecture,
             ),
             const SizedBox(width: 8),
-            // ★ 部署フィルター追加
+            // 部署フィルター
             _DropdownChip(
               label: filter.department.isNotEmpty ? filter.department : '部署 ▼',
               isActive: filter.department.isNotEmpty,
@@ -316,6 +339,17 @@ class _SubFilterBar extends StatelessWidget {
                 ...departments.map((d) => PopupMenuItem(value: d, child: Text(d))),
               ],
               onSelected: notifier.setDepartment,
+            ),
+            const SizedBox(width: 8),
+            // ★ 業種フィルター（新規追加）
+            _DropdownChip(
+              label: filter.industry.isNotEmpty ? filter.industry : '業種 ▼',
+              isActive: filter.industry.isNotEmpty,
+              items: [
+                const PopupMenuItem(value: '', child: Text('すべての業種')),
+                ...industries.map((i) => PopupMenuItem(value: i, child: Text(i))),
+              ],
+              onSelected: notifier.setIndustry,
             ),
             const SizedBox(width: 8),
             // 役職
@@ -428,7 +462,7 @@ class _ActiveFilterBanner extends StatelessWidget {
             ),
             const SizedBox(width: 4),
           ],
-          // ★ 部署バッジ
+          // 部署バッジ
           if (filter.department.isNotEmpty) ...[
             _FilterBadge(
               label: filter.department,
@@ -436,6 +470,15 @@ class _ActiveFilterBanner extends StatelessWidget {
             ),
             const SizedBox(width: 4),
           ],
+          // ★ 業種バッジ
+          if (filter.industry.isNotEmpty) ...[
+            _FilterBadge(
+              label: filter.industry,
+              onRemove: () => notifier.setIndustry(filter.industry),
+            ),
+            const SizedBox(width: 4),
+          ],
+          // 役職バッジ
           if (filter.jobLevel.isNotEmpty) ...[
             _FilterBadge(
               label: filter.jobLevel,
@@ -607,11 +650,12 @@ class _CardTile extends StatelessWidget {
                 borderRadius: BorderRadius.circular(4),
               ),
               clipBehavior: Clip.antiAlias,
-              child: card.displayImageUrl.isNotEmpty
-                  ? Image.network(card.displayImageUrl, fit: BoxFit.cover,
-                      errorBuilder: (_, __, ___) =>
-                          const Icon(Icons.broken_image, color: Color(0xFF93C5FD), size: 18))
-                  : const Icon(Icons.person, color: Color(0xFF93C5FD), size: 22),
+              child: CardImage(
+                url: card.displayImageUrl,
+                width: 56,
+                height: 34,
+                fit: BoxFit.cover,
+              ),
             ),
             const SizedBox(width: 12),
             Expanded(
@@ -828,11 +872,12 @@ class _SearchResultTile extends StatelessWidget {
                 borderRadius: BorderRadius.circular(4),
               ),
               clipBehavior: Clip.antiAlias,
-              child: card.displayImageUrl.isNotEmpty
-                  ? Image.network(card.displayImageUrl, fit: BoxFit.cover,
-                      errorBuilder: (_, __, ___) =>
-                          const Icon(Icons.broken_image, color: Color(0xFF93C5FD), size: 18))
-                  : const Icon(Icons.person, color: Color(0xFF93C5FD), size: 22),
+              child: CardImage(
+                url: card.displayImageUrl,
+                width: 56,
+                height: 34,
+                fit: BoxFit.cover,
+              ),
             ),
             const SizedBox(width: 12),
             Expanded(

@@ -59,6 +59,19 @@ dependencies:
   path: ^1.9.1
   image: ^4.7.2
 
+  # メールアプリ起動（mailto: / googlegmail:// スキーム）
+  url_launcher: ^6.3.0
+
+  # フォトライブラリから画像を選択する（手動登録画面で使用）
+  image_picker: ^1.1.2
+
+  # 画像をディスクキャッシュして高速表示・ローディングUI対応
+  # Image.network() の代替として全画面で使用する
+  cached_network_image: ^3.4.1
+
+  # メールアプリ選択を端末に永続保存する
+  shared_preferences: ^2.3.0
+
 dev_dependencies:
   flutter_test:
     sdk: flutter

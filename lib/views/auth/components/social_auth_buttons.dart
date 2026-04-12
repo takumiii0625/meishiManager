@@ -18,8 +18,29 @@ class SocialAuthButtons extends ConsumerWidget {
     return Column(
       mainAxisSize: MainAxisSize.min,
       children: [
+        // 説明文：初めての方も既存ユーザーも同じボタンでOKと伝える
+        const Text(
+          'ソーシャルアカウントでログイン',
+          style: TextStyle(
+            fontSize: 13,
+            fontWeight: FontWeight.w600,
+            color: Color(0xFF1A1F36),
+          ),
+          textAlign: TextAlign.center,
+        ),
+        const SizedBox(height: 4),
+        const Text(
+          '初めての方は自動で登録されます',
+          style: TextStyle(
+            fontSize: 11,
+            color: Color(0xFF9396A5),
+          ),
+          textAlign: TextAlign.center,
+        ),
+        const SizedBox(height: 16),
         _socialButton(
           onPressed: vm.isLoading ? null : () async {
+            FocusScope.of(context).unfocus(); // キーボードを閉じる
             final user = await ref.read(webAuthViewModelProvider).signInWithGoogle();
             if (user != null) onSuccess(user);
           },
@@ -29,6 +50,7 @@ class SocialAuthButtons extends ConsumerWidget {
         const SizedBox(height: 12),
         _socialButton(
           onPressed: vm.isLoading ? null : () async {
+            FocusScope.of(context).unfocus(); // キーボードを閉じる
             final user = await ref.read(webAuthViewModelProvider).signInWithFacebook();
             if (user != null) onSuccess(user);
           },
@@ -38,6 +60,7 @@ class SocialAuthButtons extends ConsumerWidget {
         const SizedBox(height: 12),
         _socialButton(
           onPressed: vm.isLoading ? null : () async {
+            FocusScope.of(context).unfocus(); // キーボードを閉じる
             final user = await ref.read(webAuthViewModelProvider).signInWithTwitter();
             if (user != null) onSuccess(user);
           },
