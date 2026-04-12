@@ -17,18 +17,57 @@
 //   minWidth 1000px / quality 82 → 名刺の文字が読める最低解像度を保ちつつ
 //   元画像3MB → 圧縮後150〜250KB 程度に削減
 //   quality 75未満はOCR精度が落ちるリスクがあるため非推奨
+//
+// 【一時ファイルの削除について】
+//   圧縮後は getTemporaryDirectory() に一時ファイルを書き出す。
+//   使い終わったら必ず deleteTemp() を呼んで削除すること。
+//   削除しないと、スキャンするたびに端末のtmpフォルダに
+//   圧縮済み画像が溜まり続けてストレージを圧迫する。
 // ============================================================
 
 import 'dart:io';
 import 'package:flutter_image_compress/flutter_image_compress.dart';
 import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
+import 'package:flutter/foundation.dart'; // debugPrint用
 
 /// 画像圧縮の責務をここに集約するクラス
 ///
 /// static メソッドだけなので、インスタンス化（new）せずに使える。
 /// 例: ImageCompressService.compressForUpload(path)
 class ImageCompressService {
+  // ─────────────────────────────────────────────────────────
+  // 一時ファイルを削除するヘルパー
+  //
+  // 使い方:
+  //   final compressed = await ImageCompressService.compressForUpload(path);
+  //   // ...アップロード処理...
+  //   await ImageCompressService.deleteTemp(compressed); // ← 使い終わったら削除
+  //
+  // 削除に失敗してもアプリは落ちないように try-catch している。
+  // 元画像（sourcePath）と同じパスの場合は削除しない（元画像を守るため）。
+  // ─────────────────────────────────────────────────────────
+  static Future<void> deleteTemp(File file) async {
+    try {
+      // tmpディレクトリ内のファイルだけ削除する（元画像は消さない）
+      final tmpDir = await getTemporaryDirectory();
+      if (file.path.startsWith(tmpDir.path) && await file.exists()) {
+        await file.delete();
+        debugPrint('🗑️ 一時ファイル削除: ${p.basename(file.path)}');
+      }
+    } catch (e) {
+      // 削除失敗はログだけ出してアプリを落とさない
+      debugPrint('⚠️ 一時ファイル削除失敗（無視）: $e');
+    }
+  }
+
+  // 複数ファイルをまとめて削除するヘルパー（バッチ処理用）
+  static Future<void> deleteTempAll(List<File> files) async {
+    for (final file in files) {
+      await deleteTemp(file);
+    }
+  }
+
   /// Firebase Storage アップロード用圧縮
   ///
   /// [sourcePath] 圧縮前の画像ファイルパス

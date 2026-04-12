@@ -1,3 +1,13 @@
+// ============================================================
+// web_auth_page.dart
+// ログイン画面
+//
+// 【レイアウト自動切り替え】
+//   Web（kIsWeb = true）  → 横2カラム（左：ロゴ+SNS / 右：メールフォーム）
+//   スマホ（kIsWeb = false）→ 縦1カラム（ロゴ → SNS → メールフォーム）
+// ============================================================
+
+import 'package:flutter/foundation.dart'; // kIsWeb
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
@@ -11,18 +21,50 @@ class WebAuthPage extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    ref.listen(authStateChangesProvider, (_, next) {
-      next.whenData((user) {
-        if (user != null) {
-          Navigator.of(context).pushReplacementNamed('/home');
-        }
+    // ログイン成功したら /home へ遷移
+    // ログイン状態の変化を監視して画面遷移する
+    // ただし「すでにログイン済みの状態での変化」には反応しない
+    // （SNS連携時の authStateChanges 発火でクラッシュするのを防ぐ）
+    final isAlreadyLoggedIn = ref.read(authStateChangesProvider).maybeWhen(
+      data: (u) => u != null && !u.isAnonymous,
+      orElse: () => false,
+    );
+
+    if (!isAlreadyLoggedIn) {
+      ref.listen(authStateChangesProvider, (_, next) {
+        next.whenData((user) {
+          if (user != null && !user.isAnonymous && context.mounted) {
+            Navigator.of(context).pushReplacementNamed('/home');
+          }
+        });
       });
-    });
+    }
 
     void onSuccess(user) {
+      if (!context.mounted) return;
+      // キーボードが表示されていたら閉じる
+      FocusScope.of(context).unfocus();
       Navigator.of(context).pushReplacementNamed('/home');
     }
 
+    // kIsWeb = true → Web用レイアウト
+    // kIsWeb = false → スマホ用レイアウト
+    return kIsWeb
+        ? _WebLayout(onSuccess: onSuccess)
+        : _MobileLayout(onSuccess: onSuccess);
+  }
+}
+
+// ============================================================
+// Web用レイアウト（横2カラム）
+// 変更なし・元のデザインをそのまま維持
+// ============================================================
+class _WebLayout extends StatelessWidget {
+  const _WebLayout({required this.onSuccess});
+  final void Function(dynamic user) onSuccess;
+
+  @override
+  Widget build(BuildContext context) {
     return Scaffold(
       backgroundColor: AuthColors.bg,
       body: Center(
@@ -60,51 +102,13 @@ class WebAuthPage extends ConsumerWidget {
                       child: Column(
                         mainAxisAlignment: MainAxisAlignment.center,
                         children: [
-                          // ロゴ
-                          Container(
-                            width: 72,
-                            height: 72,
-                            decoration: BoxDecoration(
-                              color: Colors.white,
-                              borderRadius: BorderRadius.circular(20),
-                              border: Border.all(color: const Color(0xFFD0D8F8)),
-                              boxShadow: [
-                                BoxShadow(
-                                  color: const Color(0xFF4361EE).withOpacity(0.1),
-                                  blurRadius: 16,
-                                  offset: const Offset(0, 4),
-                                ),
-                              ],
-                            ),
-                            child: const Center(
-                              child: Text('🪪', style: TextStyle(fontSize: 32)),
-                            ),
-                          ),
-                          const SizedBox(height: 20),
-                          const Text(
-                            'Meishi Manager',
-                            style: TextStyle(
-                              fontSize: 26,
-                              fontWeight: FontWeight.w800,
-                              color: AuthColors.primary,
-                              letterSpacing: -0.5,
-                            ),
-                          ),
-                          const SizedBox(height: 8),
-                          const Text(
-                            'ビジネス名刺をデジタルで管理',
-                            style: TextStyle(
-                              fontSize: 13,
-                              color: AuthColors.textMid,
-                            ),
-                          ),
+                          _LogoWidget(),
                           const SizedBox(height: 40),
                           SocialAuthButtons(onSuccess: onSuccess),
                         ],
                       ),
                     ),
                   ),
-
                   // ── 右側：メール/パスワードフォーム ──
                   Expanded(
                     child: SingleChildScrollView(
@@ -118,6 +122,140 @@ class WebAuthPage extends ConsumerWidget {
           ),
         ),
       ),
+    );
+  }
+}
+
+// ============================================================
+// スマホ用レイアウト（縦1カラム）
+//
+// 【構成】
+//   ロゴ
+//   ↓
+//   Googleでログイン
+//   Facebookでログイン
+//   Xでログイン
+//   ↓
+//   ── または ──
+//   ↓
+//   メール/パスワードフォーム
+// ============================================================
+class _MobileLayout extends StatelessWidget {
+  const _MobileLayout({required this.onSuccess});
+  final void Function(dynamic user) onSuccess;
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      backgroundColor: AuthColors.bg,
+      body: SafeArea(
+        child: SingleChildScrollView(
+          padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 32),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.center,
+            children: [
+              // ── ロゴ ──────────────────────────────────────
+              _LogoWidget(),
+              const SizedBox(height: 40),
+
+              // ── SNSログインボタン ────────────────────────
+              Container(
+                width: double.infinity,
+                padding: const EdgeInsets.all(20),
+                decoration: BoxDecoration(
+                  color: Colors.white,
+                  borderRadius: BorderRadius.circular(16),
+                  border: Border.all(color: AuthColors.border),
+                ),
+                child: SocialAuthButtons(onSuccess: onSuccess),
+              ),
+              const SizedBox(height: 16),
+
+              // ── 区切り線「または」────────────────────────
+              Row(
+                children: [
+                  const Expanded(child: Divider(color: AuthColors.border)),
+                  Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 12),
+                    child: Text(
+                      'または',
+                      style: TextStyle(
+                        fontSize: 12,
+                        color: AuthColors.textSub,
+                      ),
+                    ),
+                  ),
+                  const Expanded(child: Divider(color: AuthColors.border)),
+                ],
+              ),
+              const SizedBox(height: 16),
+
+              // ── メール/パスワードフォーム ─────────────────
+              Container(
+                width: double.infinity,
+                padding: const EdgeInsets.all(20),
+                decoration: BoxDecoration(
+                  color: Colors.white,
+                  borderRadius: BorderRadius.circular(16),
+                  border: Border.all(color: AuthColors.border),
+                ),
+                child: EmailAuthForm(onSuccess: onSuccess),
+              ),
+              const SizedBox(height: 24),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+// ============================================================
+// ロゴ Widget（Web・スマホ共通）
+// ============================================================
+class _LogoWidget extends StatelessWidget {
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      children: [
+        Container(
+          width: 72,
+          height: 72,
+          decoration: BoxDecoration(
+            color: Colors.white,
+            borderRadius: BorderRadius.circular(20),
+            border: Border.all(color: const Color(0xFFD0D8F8)),
+            boxShadow: [
+              BoxShadow(
+                color: const Color(0xFF4361EE).withOpacity(0.1),
+                blurRadius: 16,
+                offset: const Offset(0, 4),
+              ),
+            ],
+          ),
+          child: const Center(
+            child: Text('🪪', style: TextStyle(fontSize: 32)),
+          ),
+        ),
+        const SizedBox(height: 16),
+        const Text(
+          'Meishi Manager',
+          style: TextStyle(
+            fontSize: 24,
+            fontWeight: FontWeight.w800,
+            color: AuthColors.primary,
+            letterSpacing: -0.5,
+          ),
+        ),
+        const SizedBox(height: 6),
+        const Text(
+          'ビジネス名刺をデジタルで管理',
+          style: TextStyle(
+            fontSize: 13,
+            color: AuthColors.textMid,
+          ),
+        ),
+      ],
     );
   }
 }

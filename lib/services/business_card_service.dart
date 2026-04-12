@@ -14,6 +14,7 @@
 //   以前は並列アップロード（Future.wait）でタイムスタンプが衝突するリスクがあったため
 //   直列アップロードに変更した。
 
+import 'dart:io';
 import 'package:firebase_storage/firebase_storage.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
@@ -39,8 +40,9 @@ class BusinessCardService {
     final user = FirebaseAuth.instance.currentUser;
     if (user == null) return null;
 
+    File? compressed;
     try {
-      final compressed = await ImageCompressService.compressForUpload(imagePath);
+      compressed = await ImageCompressService.compressForUpload(imagePath);
 
       // ★ prefix（front/back）をつけてファイル名を区別する
       // 例: front_1234567890.jpg / back_1234567890.jpg
@@ -58,10 +60,17 @@ class BusinessCardService {
         SettableMetadata(contentType: 'image/jpeg'),
       );
 
-      return await storageRef.getDownloadURL();
+      final url = await storageRef.getDownloadURL();
+      return url;
     } catch (e) {
       print('Storageアップロード失敗: $e');
       return null;
+    } finally {
+      // アップロード完了またはエラー時、必ず一時ファイルを削除する
+      // finally = try/catchどちらの結果でも必ず実行されるブロック
+      if (compressed != null) {
+        await ImageCompressService.deleteTemp(compressed);
+      }
     }
   }
 
@@ -105,8 +114,20 @@ class BusinessCardService {
     // 役職：Geminiの title フィールドをそのまま使う（正規化しない）
     final jobLevel   = (card['title'] as String?) ?? '';
 
-    final industryRaw = (card['industry']             as String?) ?? '';
-    final candidates  = (card['industry_candidates']  as List?)   ?? [];
+    final industryRaw = (card['industry'] as String?) ?? '';
+
+    // industry_candidates はGeminiから [{label, confidence}, ...] の形で返ってくる。
+    // モデルは List<String> なので、ラベル名だけ抽出してリストに変換する。
+    // 例: [{"label": "IT", "confidence": 0.9}] → ["IT"]
+    final rawCandidates = (card['industry_candidates'] as List?) ?? [];
+    final candidates = rawCandidates
+        .map((e) {
+          if (e is Map) return (e['label'] as String?) ?? '';
+          if (e is String) return e; // すでに文字列の場合はそのまま使う
+          return '';
+        })
+        .where((s) => s.isNotEmpty)
+        .toList();
 
     // メモ欄：郵便番号・URLのみ（部署・役職は専用フィールドで管理）
     final notesParts = <String>[];

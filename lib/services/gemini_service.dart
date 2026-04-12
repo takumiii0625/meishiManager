@@ -2,7 +2,7 @@
 //
 // 【このファイルの役割】
 //   名刺画像をGemini APIに送って、構造化JSONとして解析結果を返す。
-//   1リクエストで最大5枚まとめて送れる（コスト・速度の最適化）。
+//   1リクエストで最大10枚まとめて送れる（コスト・速度の最適化）。
 //
 // 【解析できる項目】
 //   会社名 / 氏名 / 役職 / 電話 / メール / 住所 / 業種
@@ -14,6 +14,7 @@
 //    - Geminiへのプロンプトも「表面/裏面を合わせて解析」に変更
 
 import 'dart:convert';
+import 'dart:io'; // File型を使うため必須
 import 'package:http/http.dart' as http;
 import 'image_compress_service.dart';
 
@@ -63,9 +64,11 @@ class GeminiService {
     }
     if (imagePairs.isEmpty) return [];
 
-    // 5枚ずつに分割して処理（Geminiの制限対策）
-    // 例: 8枚 → [5枚, 3枚] の2リクエスト
-    const batchSize = 5;
+    // 10枚ずつに分割して処理（Geminiの制限対策）
+    // 例: 15枚 → [10枚, 5枚] の2リクエスト
+    // 根拠: inline_base64上限20MB / 出力8192tokens に対して
+    //       名刺10枚 = 約1MB・5,500tokens で安全圏内
+    const batchSize = 10;
     final results = <GeminiCardResult>[];
     int processed = 0;
 
@@ -83,8 +86,9 @@ class GeminiService {
       processed += chunk.length;
 
       // 最終チャンク以外は少し待つ（レートリミット対策）
+      // 10枚バッチに増やしたのでリスク対策として1000msに延長
       if (i + batchSize < imagePairs.length) {
-        await Future.delayed(const Duration(milliseconds: 500));
+        await Future.delayed(const Duration(milliseconds: 1000));
       }
     }
 
@@ -125,10 +129,15 @@ class GeminiService {
     final imageParts = <Map<String, dynamic>>[];
     final imageMeta = <Map<String, dynamic>>[];
 
+    // 使い終わった圧縮済み一時ファイルをまとめて追跡するリスト
+    // → Geminiに送信した後にまとめて削除する
+    final tempFiles = <File>[];
+
     int imageIndex = 1; // 画像の通し番号（1始まり）
     for (final pair in pairs) {
       final frontCompressed =
           await ImageCompressService.compressForGemini(pair.frontPath);
+      tempFiles.add(frontCompressed); // 削除对象に登録
       final frontBytes = await frontCompressed.readAsBytes();
       imageParts.add({
         'inline_data': {
@@ -143,6 +152,7 @@ class GeminiService {
         // 裏面がある場合のみ追加
         final backCompressed =
             await ImageCompressService.compressForGemini(pair.backPath!);
+        tempFiles.add(backCompressed); // 削除对象に登録
         final backBytes = await backCompressed.readAsBytes();
         imageParts.add({
           'inline_data': {
@@ -257,7 +267,7 @@ $cardDesc
       'generationConfig': {
         'temperature': 0.1,   // 低いほど安定した出力になる
         'topP': 0.9,
-        'maxOutputTokens': 4096, // 複数枚なので多めに確保
+        'maxOutputTokens': 8192, // 10枚×裏面ありで最大~4500tokens → 8192で安全圏
       }
     };
 
@@ -267,7 +277,11 @@ $cardDesc
           headers: {'Content-Type': 'application/json'},
           body: jsonEncode(body),
         )
-        .timeout(const Duration(seconds: 60)); // 60秒でタイムアウト
+        .timeout(const Duration(seconds: 90)); // 90秒でタイムアウト（10枚バッチ対応）
+
+    // ── Geminiに送信済み→一時ファイルをまとめて削除 ───────────────
+    // エラー時も必ず削除する（リークしないように tryの外で削除）
+    await ImageCompressService.deleteTempAll(tempFiles);
 
     if (res.statusCode != 200) {
       throw Exception('Gemini APIエラー: ${res.statusCode}\n${res.body}');

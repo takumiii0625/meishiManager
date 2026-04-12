@@ -1,11 +1,30 @@
+// ============================================================
+// web_cards_page.dart
+// Web版 名刺一覧画面
+//
+// 【機能】
+//   ・テキスト検索（氏名・会社・部署・役職・業種・住所・メモ）
+//   ・フィルター（業種・地域・役職）
+//   ・フィルター適用中バナー（✕ で個別解除）
+//   ・チェックボックスで複数選択 → 選択した人だけCSV出力
+//   ・行クリック（チェックボックス以外）→ 右側に詳細パネルを表示
+//   ・全選択/全解除チェックボックス
+//   ・名刺追加ダイアログ / 削除確認ダイアログ
+// ============================================================
+
+// ignore: avoid_web_libraries_in_flutter
+import 'dart:html' as html;
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../models/card_model.dart';
 import '../../providers/auth_providers.dart';
 import '../../providers/card_providers.dart';
 import 'components/add_card_dialog.dart';
 import 'components/cards_theme.dart';
 import 'components/delete_card_dialog.dart';
+import 'components/web_card_detail_panel.dart';
+import '../settings/web_settings_page.dart';
 
 class WebCardsPage extends ConsumerStatefulWidget {
   const WebCardsPage({super.key});
@@ -15,8 +34,20 @@ class WebCardsPage extends ConsumerStatefulWidget {
 }
 
 class _WebCardsPageState extends ConsumerState<WebCardsPage> {
+  // ── 検索・フィルター ──────────────────────────────────────
   final _searchController = TextEditingController();
-  String _searchQuery = '';
+  String _searchQuery      = '';
+  String _filterIndustry   = '';
+  String _filterPrefecture = '';
+  String _filterJobLevel   = '';
+  String _filterDepartment = ''; // 部署フィルター
+
+  // ── 詳細パネル表示用（1件）────────────────────────────────
+  CardModel? _selectedCard;
+
+  // ── CSV出力用チェック済みIDセット（複数件）────────────────
+  // Set<String> = 重複なしのIDの集まり
+  final Set<String> _checkedIds = {};
 
   @override
   void dispose() {
@@ -24,345 +55,721 @@ class _WebCardsPageState extends ConsumerState<WebCardsPage> {
     super.dispose();
   }
 
-  // ── ログアウト ──
+  // ── ログアウト ──────────────────────────────────────────
   Future<void> _signOut() async {
     await ref.read(firebaseAuthProvider).signOut();
-    if (mounted) {
-      Navigator.of(context).pushReplacementNamed('/login');
+    if (mounted) Navigator.of(context).pushReplacementNamed('/login');
+  }
+
+  // ── ダイアログ ──────────────────────────────────────────
+  void _showAddCardDialog() =>
+      showDialog(context: context, builder: (_) => const AddCardDialog());
+
+  void _showDeleteDialog(CardModel card) =>
+      showDialog(context: context, builder: (_) => DeleteCardDialog(card: card));
+
+  // ── CSV出力 ─────────────────────────────────────────────
+  // [cards] に渡したリストをCSVとしてダウンロードする
+  void _exportCsv(List<CardModel> cards) {
+    final rows = <String>['会社名,氏名,部署（役職）,業種,都道府県,メールアドレス,電話番号'];
+
+    for (final card in cards) {
+      // カンマ・ダブルクォート・改行を含む値をエスケープする
+      String esc(String v) {
+        if (v.contains(',') || v.contains('"') || v.contains('\n')) {
+          return '"${v.replaceAll('"', '""')}"';
+        }
+        return v;
+      }
+
+      final affiliation =
+          card.department.isNotEmpty && card.jobLevel.isNotEmpty
+              ? '${card.department}(${card.jobLevel})'
+              : card.department.isNotEmpty
+                  ? card.department
+                  : card.jobLevel;
+
+      rows.add([
+        esc(card.company),
+        esc(card.name),
+        esc(affiliation),
+        esc(card.industry),
+        esc(card.prefecture),
+        esc(card.email),
+        esc(card.phone),
+      ].join(','));
     }
+
+    // BOM付きUTF-8 → Excelで文字化けしない
+    final blob = html.Blob(['\uFEFF${rows.join('\n')}'], 'text/csv', 'native');
+    final now = DateTime.now();
+    final dateStr =
+        '${now.year}${now.month.toString().padLeft(2, '0')}${now.day.toString().padLeft(2, '0')}';
+    final url = html.Url.createObjectUrlFromBlob(blob);
+    html.AnchorElement(href: url)
+      ..setAttribute('download', 'meishi_$dateStr.csv')
+      ..click();
+    html.Url.revokeObjectUrl(url);
   }
 
-  // ── 名刺追加ダイアログ ──
-  void _showAddCardDialog(BuildContext context) {
-    showDialog(
-      context: context,
-      builder: (context) => const AddCardDialog(),
-    );
+  // ── フィルター適用 ──────────────────────────────────────
+  List<CardModel> _applyFilter(List<CardModel> cards) {
+    return cards.where((c) {
+      final q = _searchQuery.toLowerCase();
+      final matchSearch = q.isEmpty ||
+          c.name.toLowerCase().contains(q) ||
+          c.company.toLowerCase().contains(q) ||
+          c.department.toLowerCase().contains(q) ||
+          c.jobLevel.toLowerCase().contains(q) ||
+          c.industry.toLowerCase().contains(q) ||
+          c.address.toLowerCase().contains(q) ||
+          c.notes.toLowerCase().contains(q) ||
+          c.tags.any((t) => t.toLowerCase().contains(q));
+      final matchIndustry   = _filterIndustry.isEmpty   || c.industry   == _filterIndustry;
+      final matchPrefecture = _filterPrefecture.isEmpty || c.prefecture == _filterPrefecture;
+      final matchJobLevel   = _filterJobLevel.isEmpty   || c.jobLevel   == _filterJobLevel;
+      final matchDepartment = _filterDepartment.isEmpty || c.department == _filterDepartment;
+      return matchSearch && matchIndustry && matchPrefecture && matchJobLevel && matchDepartment;
+    }).toList();
   }
 
-  // ── 削除確認ダイアログ ──
-  void _showDeleteDialog(BuildContext context, card) {
-    showDialog(
-      context: context,
-      builder: (context) => DeleteCardDialog(card: card),
-    );
+  bool get _hasActiveFilter =>
+      _filterIndustry.isNotEmpty ||
+      _filterPrefecture.isNotEmpty ||
+      _filterJobLevel.isNotEmpty ||
+      _filterDepartment.isNotEmpty;
+
+  void _resetAllFilters() => setState(() {
+        _filterIndustry = _filterPrefecture = _filterJobLevel = _filterDepartment = '';
+      });
+
+  // ── チェックボックス操作 ────────────────────────────────
+  void _toggleCheck(String id) {
+    setState(() {
+      if (_checkedIds.contains(id)) {
+        _checkedIds.remove(id);
+      } else {
+        _checkedIds.add(id);
+      }
+    });
+  }
+
+  // 全選択 / 全解除
+  void _toggleCheckAll(List<CardModel> cards) {
+    final allIds = cards.map((c) => c.id).toSet();
+    setState(() {
+      if (_checkedIds.containsAll(allIds)) {
+        // 全部チェック済み → 全解除
+        _checkedIds.removeAll(allIds);
+      } else {
+        // 一部または0件 → 全選択
+        _checkedIds.addAll(allIds);
+      }
+    });
   }
 
   @override
   Widget build(BuildContext context) {
     final uid = ref.watch(firebaseAuthProvider).currentUser?.uid ?? '';
     final cardsAsync = uid.isEmpty
-        ? const AsyncValue<List>.loading()
+        ? const AsyncValue<List<CardModel>>.loading()
         : ref.watch(cardsStreamProvider);
 
     return Scaffold(
       backgroundColor: CardsColors.bg,
       body: Column(
         children: [
-          // ── ヘッダー ──
-          Container(
-            color: Colors.white,
-            padding: const EdgeInsets.symmetric(horizontal: 32, vertical: 16),
+          _buildHeader(),
+          const Divider(height: 1, color: CardsColors.border),
+          Expanded(
             child: Row(
               children: [
-                Container(
-                  width: 36, height: 36,
-                  decoration: BoxDecoration(
-                    color: CardsColors.primaryLight,
-                    borderRadius: BorderRadius.circular(10),
-                  ),
-                  child: const Center(
-                    child: Text('🪪', style: TextStyle(fontSize: 18)),
-                  ),
-                ),
-                const SizedBox(width: 10),
-                const Text(
-                  'Meishi Manager',
-                  style: TextStyle(
-                    fontSize: 18,
-                    fontWeight: FontWeight.w800,
-                    color: CardsColors.primary,
+                Expanded(
+                  child: cardsAsync.when(
+                    loading: () => const Center(
+                        child: CircularProgressIndicator(
+                            color: CardsColors.primary)),
+                    error: (e, _) => Center(
+                        child: Text('エラー: $e',
+                            style: const TextStyle(color: CardsColors.red))),
+                    data: (cards) => _buildListArea(cards),
                   ),
                 ),
-                const Spacer(),
-                ElevatedButton.icon(
-                  onPressed: () => _showAddCardDialog(context),
-                  icon: const Icon(Icons.add, size: 16, color: Colors.white),
-                  label: const Text('名刺を追加',
-                      style: TextStyle(
-                          fontWeight: FontWeight.w700, color: Colors.white)),
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: CardsColors.primary,
-                    foregroundColor: Colors.white,
-                    padding: const EdgeInsets.symmetric(
-                        horizontal: 18, vertical: 12),
-                    shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(10)),
-                    elevation: 0,
+                if (_selectedCard != null)
+                  WebCardDetailPanel(
+                    key: ValueKey(_selectedCard!.id),
+                    card: _selectedCard!,
+                    onClose: () => setState(() => _selectedCard = null),
                   ),
-                ),
-                const SizedBox(width: 12),
-                OutlinedButton.icon(
-                  onPressed: _signOut,
-                  icon: const Icon(Icons.logout,
-                      size: 16, color: CardsColors.textMid),
-                  label: const Text('ログアウト',
-                      style: TextStyle(color: CardsColors.textMid)),
-                  style: OutlinedButton.styleFrom(
-                    side: const BorderSide(color: CardsColors.border),
-                    shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(10)),
-                    padding: const EdgeInsets.symmetric(
-                        horizontal: 16, vertical: 12),
-                  ),
-                ),
               ],
-            ),
-          ),
-          const Divider(height: 1, color: CardsColors.border),
-
-          // ── メインコンテンツ ──
-          Expanded(
-            child: Padding(
-              padding: const EdgeInsets.all(32),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  // タイトル・件数
-                  Row(
-                    children: [
-                      const Text(
-                        '名刺一覧',
-                        style: TextStyle(
-                          fontSize: 22,
-                          fontWeight: FontWeight.w800,
-                          color: CardsColors.textMain,
-                        ),
-                      ),
-                      const SizedBox(width: 12),
-                      cardsAsync.when(
-                        data: (cards) => Container(
-                          padding: const EdgeInsets.symmetric(
-                              horizontal: 10, vertical: 4),
-                          decoration: BoxDecoration(
-                            color: CardsColors.primaryLight,
-                            borderRadius: BorderRadius.circular(20),
-                          ),
-                          child: Text(
-                            '${cards.length}件',
-                            style: const TextStyle(
-                              fontSize: 12,
-                              fontWeight: FontWeight.w700,
-                              color: CardsColors.primary,
-                            ),
-                          ),
-                        ),
-                        loading: () => const SizedBox.shrink(),
-                        error: (_, __) => const SizedBox.shrink(),
-                      ),
-                    ],
-                  ),
-                  const SizedBox(height: 20),
-
-                  // 検索
-                  SizedBox(
-                    width: 360,
-                    child: TextField(
-                      controller: _searchController,
-                      onChanged: (v) => setState(() => _searchQuery = v),
-                      style: const TextStyle(
-                          fontSize: 13, color: CardsColors.textMain),
-                      decoration: InputDecoration(
-                        hintText: '名前・会社名で検索...',
-                        hintStyle: const TextStyle(
-                            color: CardsColors.textSub, fontSize: 13),
-                        prefixIcon: const Icon(Icons.search,
-                            size: 18, color: CardsColors.textSub),
-                        filled: true,
-                        fillColor: Colors.white,
-                        contentPadding: const EdgeInsets.symmetric(
-                            horizontal: 16, vertical: 10),
-                        border: OutlineInputBorder(
-                            borderRadius: BorderRadius.circular(10),
-                            borderSide:
-                                const BorderSide(color: CardsColors.border)),
-                        enabledBorder: OutlineInputBorder(
-                            borderRadius: BorderRadius.circular(10),
-                            borderSide:
-                                const BorderSide(color: CardsColors.border)),
-                        focusedBorder: OutlineInputBorder(
-                            borderRadius: BorderRadius.circular(10),
-                            borderSide:
-                                const BorderSide(color: CardsColors.primary)),
-                      ),
-                    ),
-                  ),
-                  const SizedBox(height: 16),
-
-                  // テーブル
-                  Expanded(
-                    child: cardsAsync.when(
-                      loading: () => const Center(
-                          child: CircularProgressIndicator(
-                              color: CardsColors.primary)),
-                      error: (e, _) => Center(
-                          child: Text('エラー: $e',
-                              style: const TextStyle(
-                                  color: CardsColors.red))),
-                      data: (cards) {
-                        final filtered = cards.where((c) {
-                          final q = _searchQuery.toLowerCase();
-                          if (q.isEmpty) return true;
-                          return c.name.toLowerCase().contains(q) ||
-                              c.company.toLowerCase().contains(q);
-                        }).toList();
-
-                        if (filtered.isEmpty) {
-                          return Center(
-                            child: Column(
-                              mainAxisAlignment: MainAxisAlignment.center,
-                              children: [
-                                const Text('🪪',
-                                    style: TextStyle(fontSize: 48)),
-                                const SizedBox(height: 16),
-                                Text(
-                                  _searchQuery.isEmpty
-                                      ? 'まだ名刺が登録されていません'
-                                      : '「$_searchQuery」に一致する名刺はありません',
-                                  style: const TextStyle(
-                                      fontSize: 15,
-                                      color: CardsColors.textSub),
-                                ),
-                                if (_searchQuery.isEmpty) ...[
-                                  const SizedBox(height: 12),
-                                  ElevatedButton.icon(
-                                    onPressed: () =>
-                                        _showAddCardDialog(context),
-                                    icon: const Icon(Icons.add,
-                                        size: 16, color: Colors.white),
-                                    label: const Text('名刺を追加',
-                                        style:
-                                            TextStyle(color: Colors.white)),
-                                    style: ElevatedButton.styleFrom(
-                                      backgroundColor: CardsColors.primary,
-                                      elevation: 0,
-                                      shape: RoundedRectangleBorder(
-                                          borderRadius:
-                                              BorderRadius.circular(10)),
-                                    ),
-                                  ),
-                                ],
-                              ],
-                            ),
-                          );
-                        }
-
-                        return Container(
-                          decoration: BoxDecoration(
-                            color: Colors.white,
-                            border: Border.all(color: CardsColors.border),
-                            borderRadius: BorderRadius.circular(14),
-                            boxShadow: [
-                              BoxShadow(
-                                  color: Colors.black.withOpacity(0.04),
-                                  blurRadius: 8),
-                            ],
-                          ),
-                          child: ClipRRect(
-                            borderRadius: BorderRadius.circular(14),
-                            child: SingleChildScrollView(
-                              child: DataTable(
-                                headingRowColor: WidgetStateProperty.all(
-                                    const Color(0xFFF8F9FC)),
-                                headingTextStyle: const TextStyle(
-                                  fontSize: 11,
-                                  fontWeight: FontWeight.w700,
-                                  color: CardsColors.textSub,
-                                  letterSpacing: 0.5,
-                                ),
-                                dataTextStyle: const TextStyle(
-                                    fontSize: 13,
-                                    color: CardsColors.textMain),
-                                dividerThickness: 1,
-                                horizontalMargin: 24,
-                                columnSpacing: 32,
-                                columns: const [
-                                  DataColumn(label: Text('名前')),
-                                  DataColumn(label: Text('会社名')),
-                                  DataColumn(label: Text('メール')),
-                                  DataColumn(label: Text('電話番号')),
-                                  DataColumn(label: Text('操作')),
-                                ],
-                                rows: filtered.map((card) {
-                                  return DataRow(
-                                    color: WidgetStateProperty.resolveWith(
-                                      (states) =>
-                                          states.contains(WidgetState.hovered)
-                                              ? const Color(0xFFF8F9FC)
-                                              : Colors.white,
-                                    ),
-                                    cells: [
-                                      DataCell(Row(children: [
-                                        _avatar(card.name),
-                                        const SizedBox(width: 10),
-                                        Text(card.name,
-                                            style: const TextStyle(
-                                                fontWeight: FontWeight.w600)),
-                                      ])),
-                                      DataCell(Text(
-                                        card.company.isNotEmpty
-                                            ? card.company
-                                            : '—',
-                                        style: TextStyle(
-                                          color: card.company.isNotEmpty
-                                              ? CardsColors.textMain
-                                              : CardsColors.textSub,
-                                        ),
-                                      )),
-                                      DataCell(Text(
-                                        card.email.isNotEmpty
-                                            ? card.email
-                                            : '—',
-                                        style: TextStyle(
-                                          color: card.email.isNotEmpty
-                                              ? CardsColors.primary
-                                              : CardsColors.textSub,
-                                        ),
-                                      )),
-                                      DataCell(Text(
-                                        card.phone.isNotEmpty
-                                            ? card.phone
-                                            : '—',
-                                        style: TextStyle(
-                                          color: card.phone.isNotEmpty
-                                              ? CardsColors.textMain
-                                              : CardsColors.textSub,
-                                        ),
-                                      )),
-                                      DataCell(_iconBtn(
-                                        icon: Icons.delete_outline,
-                                        color: CardsColors.red,
-                                        bg: CardsColors.redBg,
-                                        tooltip: '削除',
-                                        onTap: () =>
-                                            _showDeleteDialog(context, card),
-                                      )),
-                                    ],
-                                  );
-                                }).toList(),
-                              ),
-                            ),
-                          ),
-                        );
-                      },
-                    ),
-                  ),
-                ],
-              ),
             ),
           ),
         ],
       ),
+    );
+  }
+
+  // ── ヘッダー ────────────────────────────────────────────
+  Widget _buildHeader() {
+    return Container(
+      color: Colors.white,
+      padding: const EdgeInsets.symmetric(horizontal: 32, vertical: 16),
+      child: Row(
+        children: [
+          Container(
+            width: 36, height: 36,
+            decoration: BoxDecoration(
+              color: CardsColors.primaryLight,
+              borderRadius: BorderRadius.circular(10),
+            ),
+            child: const Center(child: Text('🪪', style: TextStyle(fontSize: 18))),
+          ),
+          const SizedBox(width: 10),
+          const Text('Meishi Manager',
+              style: TextStyle(
+                  fontSize: 18,
+                  fontWeight: FontWeight.w800,
+                  color: CardsColors.primary)),
+          const Spacer(),
+          ElevatedButton.icon(
+            onPressed: _showAddCardDialog,
+            icon: const Icon(Icons.add, size: 16, color: Colors.white),
+            label: const Text('名刺を追加',
+                style: TextStyle(fontWeight: FontWeight.w700, color: Colors.white)),
+            style: ElevatedButton.styleFrom(
+              backgroundColor: CardsColors.primary,
+              padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 12),
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+              elevation: 0,
+            ),
+          ),
+          const SizedBox(width: 12),
+          // 設定ボタン
+          OutlinedButton.icon(
+            onPressed: () => Navigator.of(context).push(
+              MaterialPageRoute(builder: (_) => const WebSettingsPage()),
+            ),
+            icon: const Icon(Icons.settings_outlined,
+                size: 16, color: CardsColors.textMid),
+            label: const Text('設定',
+                style: TextStyle(color: CardsColors.textMid)),
+            style: OutlinedButton.styleFrom(
+              side: const BorderSide(color: CardsColors.border),
+              shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(10)),
+              padding:
+                  const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+            ),
+          ),
+          const SizedBox(width: 8),
+          OutlinedButton.icon(
+            onPressed: _signOut,
+            icon: const Icon(Icons.logout, size: 16, color: CardsColors.textMid),
+            label: const Text('ログアウト',
+                style: TextStyle(color: CardsColors.textMid)),
+            style: OutlinedButton.styleFrom(
+              side: const BorderSide(color: CardsColors.border),
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  // ── 一覧エリア ──────────────────────────────────────────
+  Widget _buildListArea(List<CardModel> allCards) {
+    final filtered    = _applyFilter(allCards);
+    final checkedInView = filtered.where((c) => _checkedIds.contains(c.id)).toList();
+    final allChecked  = filtered.isNotEmpty &&
+        filtered.every((c) => _checkedIds.contains(c.id));
+    final someChecked = filtered.any((c) => _checkedIds.contains(c.id));
+
+    final industries  = allCards.map((c) => c.industry).where((v) => v.isNotEmpty).toSet().toList()..sort();
+    final prefectures = allCards.map((c) => c.prefecture).where((v) => v.isNotEmpty).toSet().toList()..sort();
+    final jobLevels   = allCards.map((c) => c.jobLevel).where((v) => v.isNotEmpty).toSet().toList()..sort();
+    final departments = allCards.map((c) => c.department).where((v) => v.isNotEmpty).toSet().toList()..sort();
+
+    return Padding(
+      padding: const EdgeInsets.all(24),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          // ── タイトル行 ──────────────────────────────────
+          Row(
+            children: [
+              const Text('名刺一覧',
+                  style: TextStyle(
+                      fontSize: 22,
+                      fontWeight: FontWeight.w800,
+                      color: CardsColors.textMain)),
+              const SizedBox(width: 10),
+              _countBadge(filtered.length),
+              const Spacer(),
+              // 選択中がある場合 → 「選択した N 件を出力」ボタン（優先表示）
+              if (someChecked) ...[
+                ElevatedButton.icon(
+                  onPressed: () => _exportCsv(checkedInView),
+                  icon: const Icon(Icons.download, size: 16, color: Colors.white),
+                  label: Text(
+                    '選択した ${checkedInView.length} 件を出力',
+                    style: const TextStyle(color: Colors.white, fontSize: 13),
+                  ),
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: CardsColors.primary,
+                    elevation: 0,
+                    shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(8)),
+                    padding: const EdgeInsets.symmetric(
+                        horizontal: 14, vertical: 10),
+                  ),
+                ),
+                const SizedBox(width: 8),
+                // 選択解除ボタン
+                OutlinedButton(
+                  onPressed: () => setState(() => _checkedIds.clear()),
+                  style: OutlinedButton.styleFrom(
+                    side: const BorderSide(color: CardsColors.border),
+                    shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(8)),
+                    padding: const EdgeInsets.symmetric(
+                        horizontal: 12, vertical: 10),
+                  ),
+                  child: const Text('選択解除',
+                      style: TextStyle(
+                          color: CardsColors.textMid, fontSize: 13)),
+                ),
+                const SizedBox(width: 8),
+              ],
+              // 全件出力ボタン
+              if (filtered.isNotEmpty)
+                OutlinedButton.icon(
+                  onPressed: () => _exportCsv(filtered),
+                  icon: const Icon(Icons.download,
+                      size: 16, color: CardsColors.textMid),
+                  label: Text(
+                    someChecked
+                        ? '全件出力 (${filtered.length}件)'
+                        : 'CSV出力 (${filtered.length}件)',
+                    style: const TextStyle(
+                        color: CardsColors.textMid, fontSize: 13),
+                  ),
+                  style: OutlinedButton.styleFrom(
+                    side: const BorderSide(color: CardsColors.border),
+                    shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(8)),
+                    padding: const EdgeInsets.symmetric(
+                        horizontal: 14, vertical: 10),
+                  ),
+                ),
+            ],
+          ),
+          const SizedBox(height: 16),
+
+          // ── 検索 + フィルター ────────────────────────────
+          Wrap(
+            spacing: 8,
+            runSpacing: 8,
+            crossAxisAlignment: WrapCrossAlignment.center,
+            children: [
+              SizedBox(
+                width: 300,
+                child: TextField(
+                  controller: _searchController,
+                  onChanged: (v) => setState(() => _searchQuery = v),
+                  style: const TextStyle(
+                      fontSize: 13, color: CardsColors.textMain),
+                  decoration: InputDecoration(
+                    hintText: '氏名・会社・業種などで検索...',
+                    hintStyle: const TextStyle(
+                        color: CardsColors.textSub, fontSize: 13),
+                    prefixIcon: const Icon(Icons.search,
+                        size: 18, color: CardsColors.textSub),
+                    suffixIcon: _searchQuery.isNotEmpty
+                        ? IconButton(
+                            icon: const Icon(Icons.clear,
+                                size: 16, color: CardsColors.textSub),
+                            onPressed: () {
+                              _searchController.clear();
+                              setState(() => _searchQuery = '');
+                            },
+                          )
+                        : null,
+                    filled: true,
+                    fillColor: Colors.white,
+                    contentPadding: const EdgeInsets.symmetric(
+                        horizontal: 16, vertical: 10),
+                    border: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(10),
+                        borderSide:
+                            const BorderSide(color: CardsColors.border)),
+                    enabledBorder: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(10),
+                        borderSide:
+                            const BorderSide(color: CardsColors.border)),
+                    focusedBorder: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(10),
+                        borderSide:
+                            const BorderSide(color: CardsColors.primary)),
+                  ),
+                ),
+              ),
+              _FilterDropdown(
+                label: _filterIndustry.isNotEmpty ? _filterIndustry : '業種 ▼',
+                isActive: _filterIndustry.isNotEmpty,
+                items: [
+                  const PopupMenuItem(value: '', child: Text('すべての業種')),
+                  ...industries.map((v) => PopupMenuItem(value: v, child: Text(v))),
+                ],
+                onSelected: (v) => setState(() => _filterIndustry = v),
+              ),
+              _FilterDropdown(
+                label: _filterPrefecture.isNotEmpty
+                    ? _filterPrefecture
+                    : '地域 ▼',
+                isActive: _filterPrefecture.isNotEmpty,
+                items: [
+                  const PopupMenuItem(value: '', child: Text('すべての地域')),
+                  ...prefectures.map((v) => PopupMenuItem(value: v, child: Text(v))),
+                ],
+                onSelected: (v) => setState(() => _filterPrefecture = v),
+              ),
+              _FilterDropdown(
+                label: _filterJobLevel.isNotEmpty ? _filterJobLevel : '役職 ▼',
+                isActive: _filterJobLevel.isNotEmpty,
+                items: [
+                  const PopupMenuItem(value: '', child: Text('すべての役職')),
+                  ...jobLevels.map((v) => PopupMenuItem(value: v, child: Text(v))),
+                ],
+                onSelected: (v) => setState(() => _filterJobLevel = v),
+              ),
+              _FilterDropdown(
+                label: _filterDepartment.isNotEmpty ? _filterDepartment : '部署 ▼',
+                isActive: _filterDepartment.isNotEmpty,
+                items: [
+                  const PopupMenuItem(value: '', child: Text('すべての部署')),
+                  ...departments.map((v) => PopupMenuItem(value: v, child: Text(v))),
+                ],
+                onSelected: (v) => setState(() => _filterDepartment = v),
+              ),
+            ],
+          ),
+
+          // ── フィルター適用中バナー ────────────────────────
+          if (_hasActiveFilter)
+            Padding(
+              padding: const EdgeInsets.only(top: 10),
+              child: Container(
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                decoration: BoxDecoration(
+                  color: CardsColors.primaryLight,
+                  borderRadius: BorderRadius.circular(8),
+                  border: Border.all(
+                      color: CardsColors.primary.withOpacity(0.2)),
+                ),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    const Icon(Icons.filter_list,
+                        size: 14, color: CardsColors.primary),
+                    const SizedBox(width: 6),
+                    const Text('絞り込み中:',
+                        style: TextStyle(
+                            fontSize: 11, color: CardsColors.primary)),
+                    const SizedBox(width: 6),
+                    if (_filterIndustry.isNotEmpty)
+                      _FilterBadge(
+                          label: _filterIndustry,
+                          onRemove: () =>
+                              setState(() => _filterIndustry = '')),
+                    if (_filterPrefecture.isNotEmpty)
+                      _FilterBadge(
+                          label: _filterPrefecture,
+                          onRemove: () =>
+                              setState(() => _filterPrefecture = '')),
+                    if (_filterJobLevel.isNotEmpty)
+                      _FilterBadge(
+                          label: _filterJobLevel,
+                          onRemove: () =>
+                              setState(() => _filterJobLevel = '')),
+                    if (_filterDepartment.isNotEmpty)
+                      _FilterBadge(
+                          label: _filterDepartment,
+                          onRemove: () =>
+                              setState(() => _filterDepartment = '')),
+                    const SizedBox(width: 8),
+                    GestureDetector(
+                      onTap: _resetAllFilters,
+                      child: const Text('すべて解除',
+                          style: TextStyle(
+                              fontSize: 11,
+                              color: CardsColors.primary,
+                              decoration: TextDecoration.underline)),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+
+          const SizedBox(height: 12),
+
+          // ── テーブル ──────────────────────────────────────
+          Expanded(
+            child: filtered.isEmpty
+                ? _buildEmpty()
+                : _buildTable(filtered, allChecked, someChecked),
+          ),
+        ],
+      ),
+    );
+  }
+
+  // ── 件数バッジ ──────────────────────────────────────────
+  Widget _countBadge(int count) => Container(
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+        decoration: BoxDecoration(
+          color: CardsColors.primaryLight,
+          borderRadius: BorderRadius.circular(20),
+        ),
+        child: Text('$count件',
+            style: const TextStyle(
+                fontSize: 12,
+                fontWeight: FontWeight.w700,
+                color: CardsColors.primary)),
+      );
+
+  // ── 空状態 ──────────────────────────────────────────────
+  Widget _buildEmpty() {
+    return Center(
+      child: Column(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          const Text('🪪', style: TextStyle(fontSize: 48)),
+          const SizedBox(height: 16),
+          Text(
+            (_searchQuery.isNotEmpty || _hasActiveFilter)
+                ? '条件に一致する名刺はありません'
+                : 'まだ名刺が登録されていません',
+            style: const TextStyle(fontSize: 15, color: CardsColors.textSub),
+          ),
+          if (_searchQuery.isEmpty && !_hasActiveFilter) ...[
+            const SizedBox(height: 12),
+            ElevatedButton.icon(
+              onPressed: _showAddCardDialog,
+              icon: const Icon(Icons.add, size: 16, color: Colors.white),
+              label: const Text('名刺を追加',
+                  style: TextStyle(color: Colors.white)),
+              style: ElevatedButton.styleFrom(
+                backgroundColor: CardsColors.primary,
+                elevation: 0,
+                shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(10)),
+              ),
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+
+  // ── テーブル ────────────────────────────────────────────
+  Widget _buildTable(
+      List<CardModel> cards, bool allChecked, bool someChecked) {
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        return Container(
+          width: constraints.maxWidth,
+          decoration: BoxDecoration(
+            color: Colors.white,
+            border: Border.all(color: CardsColors.border),
+            borderRadius: BorderRadius.circular(14),
+            boxShadow: [
+              BoxShadow(
+                  color: Colors.black.withOpacity(0.04), blurRadius: 8),
+            ],
+          ),
+          child: ClipRRect(
+            borderRadius: BorderRadius.circular(14),
+            child: SingleChildScrollView(
+              scrollDirection: Axis.horizontal,
+              child: ConstrainedBox(
+                constraints:
+                    BoxConstraints(minWidth: constraints.maxWidth),
+                child: DataTable(
+                  headingRowColor: WidgetStateProperty.all(
+                      const Color(0xFFF8F9FC)),
+                  headingTextStyle: const TextStyle(
+                    fontSize: 11,
+                    fontWeight: FontWeight.w700,
+                    color: CardsColors.textSub,
+                    letterSpacing: 0.5,
+                  ),
+                  dataTextStyle: const TextStyle(
+                      fontSize: 13, color: CardsColors.textMain),
+                  dividerThickness: 1,
+                  horizontalMargin: 16,
+                  columnSpacing: 24,
+                  columns: [
+                    // ヘッダーのチェックボックス列（全選択/全解除）
+                    DataColumn(
+                      label: Tooltip(
+                        message: allChecked ? '全解除' : '全選択',
+                        child: Checkbox(
+                          value: allChecked
+                              ? true
+                              : someChecked
+                                  ? null  // 一部選択 → 中間状態（-）
+                                  : false,
+                          tristate: true, // 中間状態（-）を許可
+                          onChanged: (_) => _toggleCheckAll(cards),
+                          activeColor: CardsColors.primary,
+                        ),
+                      ),
+                    ),
+                    const DataColumn(label: Text('名前')),
+                    const DataColumn(label: Text('会社名 / 部署')),
+                    const DataColumn(label: Text('業種')),
+                    const DataColumn(label: Text('メール')),
+                    const DataColumn(label: Text('電話番号')),
+                    const DataColumn(label: Text('操作')),
+                  ],
+                  rows: cards.map((card) {
+                    final isChecked = _checkedIds.contains(card.id);
+                    final isPanelOpen = _selectedCard?.id == card.id;
+
+                    return DataRow(
+                      // チェック状態で行の背景色を変える
+                      color: WidgetStateProperty.resolveWith((states) {
+                        if (isChecked) {
+                          return CardsColors.primaryLight;
+                        }
+                        if (isPanelOpen) {
+                          return const Color(0xFFF0F4FF);
+                        }
+                        if (states.contains(WidgetState.hovered)) {
+                          return const Color(0xFFF8F9FC);
+                        }
+                        return Colors.white;
+                      }),
+                      cells: [
+                        // チェックボックスセル
+                        DataCell(
+                          Checkbox(
+                            value: isChecked,
+                            onChanged: (_) => _toggleCheck(card.id),
+                            activeColor: CardsColors.primary,
+                          ),
+                        ),
+                        // 名前（クリックで詳細パネル表示）
+                        DataCell(
+                          GestureDetector(
+                            onTap: () => setState(() =>
+                                _selectedCard =
+                                    isPanelOpen ? null : card),
+                            child: Row(children: [
+                              _avatar(card.name),
+                              const SizedBox(width: 10),
+                              Flexible(
+                                child: Text(card.name,
+                                    style: const TextStyle(
+                                        fontWeight: FontWeight.w600),
+                                    overflow: TextOverflow.ellipsis),
+                              ),
+                            ]),
+                          ),
+                        ),
+                        // 会社名 / 部署
+                        DataCell(
+                          GestureDetector(
+                            onTap: () => setState(() =>
+                                _selectedCard =
+                                    isPanelOpen ? null : card),
+                            child: Column(
+                              mainAxisSize: MainAxisSize.min,
+                              mainAxisAlignment: MainAxisAlignment.center,
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text(
+                                  card.company.isNotEmpty
+                                      ? card.company
+                                      : '—',
+                                  style: TextStyle(
+                                      color: card.company.isNotEmpty
+                                          ? CardsColors.textMain
+                                          : CardsColors.textSub,
+                                      fontSize: 13),
+                                  overflow: TextOverflow.ellipsis,
+                                  maxLines: 1,
+                                ),
+                                if (card.affiliationText.isNotEmpty)
+                                  Text(
+                                    card.affiliationText,
+                                    style: const TextStyle(
+                                        fontSize: 11,
+                                        color: CardsColors.textSub),
+                                    overflow: TextOverflow.ellipsis,
+                                    maxLines: 1,
+                                  ),
+                              ],
+                            ),
+                          ),
+                        ),
+                        // 業種
+                        DataCell(Text(
+                          card.industry.isNotEmpty ? card.industry : '—',
+                          style: TextStyle(
+                              color: card.industry.isNotEmpty
+                                  ? CardsColors.textMain
+                                  : CardsColors.textSub),
+                        )),
+                        // メール
+                        DataCell(Text(
+                          card.email.isNotEmpty ? card.email : '—',
+                          style: TextStyle(
+                              color: card.email.isNotEmpty
+                                  ? CardsColors.primary
+                                  : CardsColors.textSub),
+                          overflow: TextOverflow.ellipsis,
+                        )),
+                        // 電話番号
+                        DataCell(Text(
+                          card.phone.isNotEmpty ? card.phone : '—',
+                          style: TextStyle(
+                              color: card.phone.isNotEmpty
+                                  ? CardsColors.textMain
+                                  : CardsColors.textSub),
+                        )),
+                        // 操作ボタン
+                        DataCell(Row(children: [
+                          _iconBtn(
+                            icon: Icons.open_in_new,
+                            color: CardsColors.primary,
+                            bg: CardsColors.primaryLight,
+                            tooltip: '詳細を表示',
+                            onTap: () => setState(() =>
+                                _selectedCard =
+                                    isPanelOpen ? null : card),
+                          ),
+                          const SizedBox(width: 6),
+                          _iconBtn(
+                            icon: Icons.delete_outline,
+                            color: CardsColors.red,
+                            bg: CardsColors.redBg,
+                            tooltip: '削除',
+                            onTap: () => _showDeleteDialog(card),
+                          ),
+                        ])),
+                      ],
+                    );
+                  }).toList(),
+                ),
+              ),
+            ),
+          ),
+        );
+      },
     );
   }
 
@@ -407,4 +814,77 @@ class _WebCardsPageState extends ConsumerState<WebCardsPage> {
           ),
         ),
       );
+}
+
+// ── フィルタードロップダウン ──────────────────────────────────
+class _FilterDropdown extends StatelessWidget {
+  final String label;
+  final bool isActive;
+  final List<PopupMenuEntry<String>> items;
+  final void Function(String) onSelected;
+
+  const _FilterDropdown({
+    required this.label,
+    required this.isActive,
+    required this.items,
+    required this.onSelected,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return PopupMenuButton<String>(
+      onSelected: onSelected,
+      itemBuilder: (_) => items,
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 150),
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+        decoration: BoxDecoration(
+          color: isActive ? CardsColors.primaryLight : Colors.white,
+          border: Border.all(
+              color: isActive ? CardsColors.primary : CardsColors.border),
+          borderRadius: BorderRadius.circular(8),
+        ),
+        child: Text(
+          label,
+          style: TextStyle(
+            fontSize: 12,
+            color: isActive ? CardsColors.primary : CardsColors.textMid,
+            fontWeight: isActive ? FontWeight.w700 : FontWeight.normal,
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+// ── フィルターバッジ ──────────────────────────────────────────
+class _FilterBadge extends StatelessWidget {
+  final String label;
+  final VoidCallback onRemove;
+
+  const _FilterBadge({required this.label, required this.onRemove});
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      margin: const EdgeInsets.only(right: 6),
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+      decoration: BoxDecoration(
+        color: CardsColors.primary,
+        borderRadius: BorderRadius.circular(12),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Text(label,
+              style: const TextStyle(fontSize: 11, color: Colors.white)),
+          const SizedBox(width: 4),
+          GestureDetector(
+            onTap: onRemove,
+            child: const Icon(Icons.close, size: 12, color: Colors.white70),
+          ),
+        ],
+      ),
+    );
+  }
 }

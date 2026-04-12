@@ -49,5 +49,68 @@
 	<string>名刺をスキャンするためにカメラを使用します。</string>
 	<key>NSPhotoLibraryUsageDescription</key>
 	<string>名刺画像を選択するためにライブラリを使用します。</string>
+
+	<!-- ============================================================ -->
+	<!-- URLスキーム設定                                               -->
+	<!-- Google と Facebook のログイン後にアプリに戻るために必要       -->
+	<!-- ============================================================ -->
+	<key>CFBundleURLTypes</key>
+	<array>
+		<!-- Googleログイン用URLスキーム                               -->
+		<!-- REVERSED_CLIENT_ID = GoogleService-Info.plist から取得   -->
+		<dict>
+			<key>CFBundleTypeRole</key>
+			<string>Editor</string>
+			<key>CFBundleURLSchemes</key>
+			<array>
+				<string>com.googleusercontent.apps.348942507169-1ke1vqbn8nttrv698p9fca1tt4po3sja</string>
+			</array>
+		</dict>
+		<!-- FacebookログインURLスキーム                               -->
+		<!-- fb + FacebookAppID の形式                                 -->
+		<dict>
+			<key>CFBundleTypeRole</key>
+			<string>Editor</string>
+			<key>CFBundleURLSchemes</key>
+			<array>
+				<string>fb1271815108222670</string>
+			</array>
+		</dict>
+	</array>
+
+	<!-- ============================================================ -->
+	<!-- Facebook設定                                                  -->
+	<!-- developers.facebook.com で確認した値を設定する               -->
+	<!-- ============================================================ -->
+
+	<!-- FacebookアプリのID -->
+	<key>FacebookAppID</key>
+	<string>1271815108222670</string>
+
+	<!-- Facebookクライアントトークン（詳細設定から取得） -->
+	<key>FacebookClientToken</key>
+	<string>da822530bcc1e041665c540ce910a447</string>
+
+	<!-- アプリ内に表示するアプリ名 -->
+	<key>FacebookDisplayName</key>
+	<string>Meishi Manager</string>
+
+	<!-- 外部アプリを起動するために必要なURLスキーム一覧 -->
+	<key>LSApplicationQueriesSchemes</key>
+	<array>
+		<!-- Facebook -->
+		<string>fbapi</string>
+		<string>fb-messenger-share-api</string>
+		<string>fbauth2</string>
+		<string>fbshareextension</string>
+		<!-- メールアプリ -->
+		<string>googlegmail</string>
+		<string>ms-outlook</string>
+		<string>readdle-spark</string>
+		<string>airmail</string>
+		<string>ymail</string>
+		<string>fastmail</string>
+		<string>protonmail</string>
+	</array>
 </dict>
 </plist>

@@ -31,7 +31,7 @@ import 'batch_analyze_page.dart';
 
 class MultiScanPage extends StatefulWidget {
   final int maxBatchSize;
-  const MultiScanPage({super.key, this.maxBatchSize = 5});
+  const MultiScanPage({super.key, this.maxBatchSize = 10}); // Geminiの安全上限に合わせて10枚
 
   @override
   State<MultiScanPage> createState() => _MultiScanPageState();

@@ -3,7 +3,7 @@
 // 「登録」タブの画面
 //
 // 【メニュー構成】
-//   1. 名刺をスキャン → MultiScanPage（カメラ撮影 → Gemini自動解析）
+//   1. 名刺をスキャン → MultiScanPage（カメラ撮影 → 自動解析・保存）
 //   2. 手動で登録    → CardAddPage（フォーム入力）
 //
 // 【画面の作りかた】
@@ -36,13 +36,14 @@ class AddTabPage extends StatelessWidget {
             icon: Icons.document_scanner,
             iconColor: const Color(0xFF1E40AF),
             title: '名刺をスキャン',
-            subtitle: 'カメラで撮影 → Geminiが自動解析・保存',
+            subtitle: 'カメラで撮影 → 名刺情報を自動で読み取り・保存',
             badge: 'おすすめ',
             onTap: () {
-              // MultiScanPage へ直接遷移（最大5枚まとめて撮影できる）
+              // MultiScanPage へ直接遷移
+              // maxBatchSize は省略 → デフォルトの10枚が使われる
               Navigator.of(context).push(
                 MaterialPageRoute(
-                  builder: (_) => const MultiScanPage(maxBatchSize: 5),
+                  builder: (_) => const MultiScanPage(),
                 ),
               );
             },

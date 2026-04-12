@@ -74,7 +74,10 @@ class _EmailAuthFormState extends ConsumerState<EmailAuthForm> {
       );
     }
 
-    if (user != null && mounted) widget.onSuccess(user);
+    if (user != null && mounted) {
+      FocusScope.of(context).unfocus(); // キーボードを閉じる
+      widget.onSuccess(user);
+    }
   }
 
   // ── パスワードリセットダイアログ ──
