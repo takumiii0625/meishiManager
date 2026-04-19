@@ -15,6 +15,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:url_launcher/url_launcher.dart';
 import '../../../models/card_model.dart';
+import '../../../providers/card_providers.dart';
 import '../../../services/mail_app_service.dart';
 import 'cards_theme.dart';
 
@@ -203,31 +204,8 @@ class _WebCardDetailPanelState extends ConsumerState<WebCardDetailPanel> {
                     _infoRow(Icons.notes, 'メモ', card.notes),
 
                   // ── タグ ──────────────────────────────────
-                  if (card.tags.isNotEmpty) ...[
-                    const SizedBox(height: 8),
-                    const Text('タグ',
-                        style: TextStyle(
-                            fontSize: 11,
-                            fontWeight: FontWeight.w600,
-                            color: CardsColors.textSub)),
-                    const SizedBox(height: 6),
-                    Wrap(
-                      spacing: 6,
-                      runSpacing: 4,
-                      children: card.tags.map((tag) => Container(
-                        padding: const EdgeInsets.symmetric(
-                            horizontal: 10, vertical: 4),
-                        decoration: BoxDecoration(
-                          color: const Color(0xFFF0FDF4),
-                          border: Border.all(color: const Color(0xFFBBF7D0)),
-                          borderRadius: BorderRadius.circular(12),
-                        ),
-                        child: Text(tag,
-                            style: const TextStyle(
-                                fontSize: 11, color: Color(0xFF16A34A))),
-                      )).toList(),
-                    ),
-                  ],
+                  const SizedBox(height: 8),
+                  _TagSection(card: card),
 
                   // ── 登録日 ────────────────────────────────
                   const SizedBox(height: 16),
@@ -361,5 +339,182 @@ class _WebCardDetailPanelState extends ConsumerState<WebCardDetailPanel> {
       final fallback = Uri(scheme: 'mailto', path: address);
       if (await canLaunchUrl(fallback)) await launchUrl(fallback);
     }
+  }
+}
+
+// ================================================================
+// タグ編集セクション
+// ================================================================
+class _TagSection extends ConsumerStatefulWidget {
+  final CardModel card;
+  const _TagSection({required this.card});
+
+  @override
+  ConsumerState<_TagSection> createState() => _TagSectionState();
+}
+
+class _TagSectionState extends ConsumerState<_TagSection> {
+  bool _isAdding = false;
+  final _ctrl = TextEditingController();
+
+  @override
+  void dispose() {
+    _ctrl.dispose();
+    super.dispose();
+  }
+
+  Future<void> _addTag(List<String> currentTags) async {
+    final tag = _ctrl.text.trim();
+    if (tag.isEmpty || currentTags.contains(tag)) {
+      _ctrl.clear();
+      return;
+    }
+    await ref.read(updateTagsProvider(
+      UpdateTagsParams(
+          cardId: widget.card.id,
+          tags: [...currentTags, tag]),
+    ).future);
+    _ctrl.clear();
+    if (mounted) setState(() => _isAdding = false);
+  }
+
+  Future<void> _removeTag(List<String> currentTags, String tag) async {
+    await ref.read(updateTagsProvider(
+      UpdateTagsParams(
+          cardId: widget.card.id,
+          tags: currentTags.where((t) => t != tag).toList()),
+    ).future);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    // カードをリアルタイム監視 → タグ更新が即時反映される
+    final cardAsync = ref.watch(cardStreamProvider(widget.card.id));
+    final tags = cardAsync.valueOrNull?.tags ?? widget.card.tags;
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        // ── ヘッダー ──
+        Row(
+          children: [
+            const Text('タグ',
+                style: TextStyle(
+                    fontSize: 11,
+                    fontWeight: FontWeight.w600,
+                    color: CardsColors.textSub)),
+            const Spacer(),
+            GestureDetector(
+              onTap: () => setState(() => _isAdding = !_isAdding),
+              child: Row(
+                children: [
+                  Icon(
+                    _isAdding ? Icons.close : Icons.add,
+                    size: 13,
+                    color: CardsColors.primary,
+                  ),
+                  const SizedBox(width: 2),
+                  Text(
+                    _isAdding ? 'キャンセル' : 'タグ追加',
+                    style: const TextStyle(
+                        fontSize: 11, color: CardsColors.primary),
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
+        const SizedBox(height: 6),
+
+        // ── タグ一覧 ──
+        if (tags.isNotEmpty)
+          Wrap(
+            spacing: 6,
+            runSpacing: 4,
+            children: tags.map((tag) => Container(
+              padding: const EdgeInsets.symmetric(
+                  horizontal: 8, vertical: 3),
+              decoration: BoxDecoration(
+                color: CardsColors.primaryLight,
+                border: Border.all(
+                    color: CardsColors.primary.withOpacity(0.3)),
+                borderRadius: BorderRadius.circular(12),
+              ),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Text(tag,
+                      style: const TextStyle(
+                          fontSize: 11,
+                          color: CardsColors.primary,
+                          fontWeight: FontWeight.w600)),
+                  const SizedBox(width: 4),
+                  GestureDetector(
+                    onTap: () => _removeTag(tags, tag),
+                    child: const Icon(Icons.close,
+                        size: 11, color: CardsColors.primary),
+                  ),
+                ],
+              ),
+            )).toList(),
+          ),
+
+        // ── タグ入力フォーム ──
+        if (_isAdding) ...[
+          const SizedBox(height: 8),
+          Row(
+            children: [
+              Expanded(
+                child: TextField(
+                  controller: _ctrl,
+                  autofocus: true,
+                  style: const TextStyle(
+                      fontSize: 12, color: CardsColors.textMain),
+                  decoration: InputDecoration(
+                    hintText: 'タグを入力（例: 展示会）',
+                    hintStyle: const TextStyle(
+                        fontSize: 12, color: CardsColors.textSub),
+                    isDense: true,
+                    contentPadding: const EdgeInsets.symmetric(
+                        horizontal: 10, vertical: 8),
+                    border: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(8),
+                        borderSide:
+                            const BorderSide(color: CardsColors.border)),
+                    enabledBorder: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(8),
+                        borderSide:
+                            const BorderSide(color: CardsColors.border)),
+                    focusedBorder: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(8),
+                        borderSide:
+                            const BorderSide(color: CardsColors.primary)),
+                    filled: true,
+                    fillColor: Colors.white,
+                  ),
+                  onSubmitted: (_) => _addTag(tags),
+                ),
+              ),
+              const SizedBox(width: 6),
+              ElevatedButton(
+                onPressed: () => _addTag(tags),
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: CardsColors.primary,
+                  foregroundColor: Colors.white,
+                  shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(8)),
+                  padding: const EdgeInsets.symmetric(
+                      horizontal: 12, vertical: 8),
+                  elevation: 0,
+                ),
+                child: const Text('追加',
+                    style: TextStyle(
+                        fontSize: 12, fontWeight: FontWeight.w700)),
+              ),
+            ],
+          ),
+        ],
+      ],
+    );
   }
 }

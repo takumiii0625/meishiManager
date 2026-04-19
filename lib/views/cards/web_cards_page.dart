@@ -13,13 +13,15 @@
 // ============================================================
 
 // ignore: avoid_web_libraries_in_flutter
-import 'dart:html' as html;
+import 'csv_download_stub.dart'
+    if (dart.library.html) 'csv_download_web.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../models/card_model.dart';
 import '../../providers/auth_providers.dart';
 import '../../providers/card_providers.dart';
+import '../../services/mail_app_service.dart';
 import 'components/add_card_dialog.dart';
 import 'components/cards_theme.dart';
 import 'components/delete_card_dialog.dart';
@@ -33,7 +35,8 @@ class WebCardsPage extends ConsumerStatefulWidget {
   ConsumerState<WebCardsPage> createState() => _WebCardsPageState();
 }
 
-class _WebCardsPageState extends ConsumerState<WebCardsPage> {
+class _WebCardsPageState extends ConsumerState<WebCardsPage>
+    with SingleTickerProviderStateMixin {
   // ── 検索・フィルター ──────────────────────────────────────
   final _searchController = TextEditingController();
   String _searchQuery      = '';
@@ -41,6 +44,10 @@ class _WebCardsPageState extends ConsumerState<WebCardsPage> {
   String _filterPrefecture = '';
   String _filterJobLevel   = '';
   String _filterDepartment = ''; // 部署フィルター
+
+  // ── タブ・並び替え ────────────────────────────────────────
+  late final TabController _tabController;
+  bool _sortNewest = true;
 
   // ── 詳細パネル表示用（1件）────────────────────────────────
   CardModel? _selectedCard;
@@ -50,7 +57,15 @@ class _WebCardsPageState extends ConsumerState<WebCardsPage> {
   final Set<String> _checkedIds = {};
 
   @override
+  void initState() {
+    super.initState();
+    _tabController = TabController(length: 4, vsync: this);
+    _tabController.addListener(() => setState(() {}));
+  }
+
+  @override
   void dispose() {
+    _tabController.dispose();
     _searchController.dispose();
     super.dispose();
   }
@@ -59,6 +74,13 @@ class _WebCardsPageState extends ConsumerState<WebCardsPage> {
   Future<void> _signOut() async {
     await ref.read(firebaseAuthProvider).signOut();
     if (mounted) Navigator.of(context).pushReplacementNamed('/login');
+  }
+
+  // ── ゴミ箱画面 ────────────────────────────────────────────
+  void _openTrash() {
+    Navigator.of(context).push(
+      MaterialPageRoute(builder: (_) => const _TrashPage()),
+    );
   }
 
   // ── ダイアログ ──────────────────────────────────────────
@@ -101,20 +123,15 @@ class _WebCardsPageState extends ConsumerState<WebCardsPage> {
     }
 
     // BOM付きUTF-8 → Excelで文字化けしない
-    final blob = html.Blob(['\uFEFF${rows.join('\n')}'], 'text/csv', 'native');
     final now = DateTime.now();
     final dateStr =
         '${now.year}${now.month.toString().padLeft(2, '0')}${now.day.toString().padLeft(2, '0')}';
-    final url = html.Url.createObjectUrlFromBlob(blob);
-    html.AnchorElement(href: url)
-      ..setAttribute('download', 'meishi_$dateStr.csv')
-      ..click();
-    html.Url.revokeObjectUrl(url);
+    downloadCsvOnWeb('\uFEFF${rows.join('\n')}', 'meishi_$dateStr.csv');
   }
 
   // ── フィルター適用 ──────────────────────────────────────
   List<CardModel> _applyFilter(List<CardModel> cards) {
-    return cards.where((c) {
+    final result = cards.where((c) {
       final q = _searchQuery.toLowerCase();
       final matchSearch = q.isEmpty ||
           c.name.toLowerCase().contains(q) ||
@@ -131,6 +148,10 @@ class _WebCardsPageState extends ConsumerState<WebCardsPage> {
       final matchDepartment = _filterDepartment.isEmpty || c.department == _filterDepartment;
       return matchSearch && matchIndustry && matchPrefecture && matchJobLevel && matchDepartment;
     }).toList();
+    result.sort((a, b) => _sortNewest
+        ? b.createdAt.compareTo(a.createdAt)
+        : a.createdAt.compareTo(b.createdAt));
+    return result;
   }
 
   bool get _hasActiveFilter =>
@@ -241,6 +262,18 @@ class _WebCardsPageState extends ConsumerState<WebCardsPage> {
               padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 12),
               shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
               elevation: 0,
+            ),
+          ),
+          const SizedBox(width: 8),
+          // ゴミ箱
+          OutlinedButton.icon(
+            onPressed: _openTrash,
+            icon: const Icon(Icons.delete_outline, size: 16, color: CardsColors.textMid),
+            label: const Text('ゴミ箱', style: TextStyle(color: CardsColors.textMid)),
+            style: OutlinedButton.styleFrom(
+              side: const BorderSide(color: CardsColors.border),
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
             ),
           ),
           const SizedBox(width: 12),
@@ -367,6 +400,26 @@ class _WebCardsPageState extends ConsumerState<WebCardsPage> {
           ),
           const SizedBox(height: 16),
 
+          // ── タブ ────────────────────────────────────────────
+          TabBar(
+            controller: _tabController,
+            isScrollable: true,
+            tabAlignment: TabAlignment.start,
+            labelColor: CardsColors.primary,
+            unselectedLabelColor: CardsColors.textSub,
+            indicatorColor: CardsColors.primary,
+            indicatorSize: TabBarIndicatorSize.label,
+            dividerColor: Colors.transparent,
+            tabs: const [
+              Tab(text: 'すべて'),
+              Tab(text: '業種'),
+              Tab(text: '地域'),
+              Tab(text: 'タグ'),
+            ],
+          ),
+          const Divider(height: 1, color: CardsColors.border),
+          const SizedBox(height: 12),
+
           // ── 検索 + フィルター ────────────────────────────
           Wrap(
             spacing: 8,
@@ -453,6 +506,16 @@ class _WebCardsPageState extends ConsumerState<WebCardsPage> {
                 ],
                 onSelected: (v) => setState(() => _filterDepartment = v),
               ),
+              // 並び替えボタン
+              _FilterDropdown(
+                label: _sortNewest ? '新しい順 ↓' : '古い順 ↑',
+                isActive: false,
+                items: [
+                  const PopupMenuItem(value: 'newest', child: Text('新しい順')),
+                  const PopupMenuItem(value: 'oldest', child: Text('古い順')),
+                ],
+                onSelected: (v) => setState(() => _sortNewest = v == 'newest'),
+              ),
             ],
           ),
 
@@ -519,9 +582,62 @@ class _WebCardsPageState extends ConsumerState<WebCardsPage> {
           Expanded(
             child: filtered.isEmpty
                 ? _buildEmpty()
-                : _buildTable(filtered, allChecked, someChecked),
+                : _tabController.index == 0
+                    ? _buildTable(filtered, allChecked, someChecked)
+                    : _buildGroupedTable(filtered, allChecked, someChecked),
           ),
         ],
+      ),
+    );
+  }
+
+  // ── グループ表示 ─────────────────────────────────────────
+  Widget _buildGroupedTable(
+      List<CardModel> cards, bool allChecked, bool someChecked) {
+    String keyOf(CardModel c) {
+      switch (_tabController.index) {
+        case 1: return c.industry.isNotEmpty ? c.industry : 'その他';
+        case 2: return c.prefecture.isNotEmpty ? c.prefecture : '地域不明';
+        case 3: return c.tags.isNotEmpty ? c.tags.first : 'タグなし';
+        default: return '';
+      }
+    }
+    String iconOf() {
+      if (_tabController.index == 2) return '📍';
+      if (_tabController.index == 3) return '🏷';
+      return '🏢';
+    }
+
+    final grouped = <String, List<CardModel>>{};
+    for (final c in cards) {
+      grouped.putIfAbsent(keyOf(c), () => []).add(c);
+    }
+    final keys = grouped.keys.toList()..sort();
+
+    return SingleChildScrollView(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: keys.map((key) {
+          final group = grouped[key]!;
+          return Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Padding(
+                padding: const EdgeInsets.only(top: 16, bottom: 8),
+                child: Row(children: [
+                  Text('${iconOf()} $key',
+                      style: const TextStyle(
+                          fontSize: 14, fontWeight: FontWeight.w700,
+                          color: CardsColors.textMain)),
+                  const SizedBox(width: 8),
+                  _countBadge(group.length),
+                ]),
+              ),
+              _buildTable(group, allChecked, someChecked),
+              const SizedBox(height: 8),
+            ],
+          );
+        }).toList(),
       ),
     );
   }
@@ -608,6 +724,8 @@ class _WebCardsPageState extends ConsumerState<WebCardsPage> {
                   ),
                   dataTextStyle: const TextStyle(
                       fontSize: 13, color: CardsColors.textMain),
+                  dataRowMinHeight: 52,
+                  dataRowMaxHeight: 72,
                   dividerThickness: 1,
                   horizontalMargin: 16,
                   columnSpacing: 24,
@@ -672,10 +790,39 @@ class _WebCardsPageState extends ConsumerState<WebCardsPage> {
                               _avatar(card.name),
                               const SizedBox(width: 10),
                               Flexible(
-                                child: Text(card.name,
-                                    style: const TextStyle(
-                                        fontWeight: FontWeight.w600),
-                                    overflow: TextOverflow.ellipsis),
+                                child: Column(
+                                  mainAxisSize: MainAxisSize.min,
+                                  mainAxisAlignment: MainAxisAlignment.center,
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    Text(card.name,
+                                        style: const TextStyle(
+                                            fontWeight: FontWeight.w600),
+                                        overflow: TextOverflow.ellipsis),
+                                    if (card.tags.isNotEmpty) ...[
+                                      const SizedBox(height: 3),
+                                      Wrap(
+                                        spacing: 4,
+                                        children: card.tags.take(3).map((tag) =>
+                                          Container(
+                                            padding: const EdgeInsets.symmetric(
+                                                horizontal: 6, vertical: 2),
+                                            decoration: BoxDecoration(
+                                              color: const Color(0xFFF0FDF4),
+                                              border: Border.all(
+                                                  color: const Color(0xFFBBF7D0)),
+                                              borderRadius: BorderRadius.circular(6),
+                                            ),
+                                            child: Text(tag,
+                                                style: const TextStyle(
+                                                    fontSize: 10,
+                                                    color: Color(0xFF16A34A))),
+                                          ),
+                                        ).toList(),
+                                      ),
+                                    ],
+                                  ],
+                                ),
                               ),
                             ]),
                           ),
@@ -725,14 +872,46 @@ class _WebCardsPageState extends ConsumerState<WebCardsPage> {
                                   : CardsColors.textSub),
                         )),
                         // メール
-                        DataCell(Text(
-                          card.email.isNotEmpty ? card.email : '—',
-                          style: TextStyle(
-                              color: card.email.isNotEmpty
-                                  ? CardsColors.primary
-                                  : CardsColors.textSub),
-                          overflow: TextOverflow.ellipsis,
-                        )),
+                        DataCell(
+                          card.email.isNotEmpty
+                              ? InkWell(
+                                  onTap: () async {
+                                    final confirmed = await showDialog<bool>(
+                                      context: context,
+                                      builder: (context) => _MailConfirmDialog(
+                                          email: card.email),
+                                    );
+                                    if (confirmed == true) {
+                                      final mailApp = ref
+                                          .read(selectedMailAppProvider)
+                                          .valueOrNull ?? kWebMailApps.first;
+                                      await launchMailApp(mailApp, card.email);
+                                    }
+                                  },
+                                  child: Row(
+                                    mainAxisSize: MainAxisSize.min,
+                                    children: [
+                                      Flexible(
+                                        child: Text(card.email,
+                                            style: const TextStyle(
+                                              color: CardsColors.primary,
+                                              decoration:
+                                                  TextDecoration.underline,
+                                              decorationColor:
+                                                  CardsColors.primary,
+                                            ),
+                                            overflow: TextOverflow.ellipsis),
+                                      ),
+                                      const SizedBox(width: 4),
+                                      const Icon(Icons.mail_outline,
+                                          size: 13, color: CardsColors.primary),
+                                    ],
+                                  ),
+                                )
+                              : const Text('—',
+                                  style:
+                                      TextStyle(color: CardsColors.textSub)),
+                        ),
                         // 電話番号
                         DataCell(Text(
                           card.phone.isNotEmpty ? card.phone : '—',
@@ -882,6 +1061,268 @@ class _FilterBadge extends StatelessWidget {
           GestureDetector(
             onTap: onRemove,
             child: const Icon(Icons.close, size: 12, color: Colors.white70),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+// ================================================================
+// メール確認ダイアログ
+// ================================================================
+class _MailConfirmDialog extends StatelessWidget {
+  final String email;
+  const _MailConfirmDialog({required this.email});
+
+  @override
+  Widget build(BuildContext context) {
+    return Dialog(
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+      child: Container(
+        width: 360,
+        padding: const EdgeInsets.all(24),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const Icon(Icons.mail_outline, size: 32, color: CardsColors.primary),
+            const SizedBox(height: 12),
+            const Text('メールを作成しますか？',
+                style: TextStyle(
+                    fontSize: 16,
+                    fontWeight: FontWeight.w700,
+                    color: CardsColors.textMain)),
+            const SizedBox(height: 8),
+            Text(email,
+                style: const TextStyle(
+                    fontSize: 13, color: CardsColors.primary)),
+            const SizedBox(height: 20),
+            Row(
+              children: [
+                Expanded(
+                  child: OutlinedButton(
+                    onPressed: () => Navigator.pop(context, false),
+                    style: OutlinedButton.styleFrom(
+                      side: const BorderSide(color: CardsColors.border),
+                      shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(10)),
+                      padding: const EdgeInsets.symmetric(vertical: 12),
+                    ),
+                    child: const Text('キャンセル',
+                        style: TextStyle(color: CardsColors.textSub)),
+                  ),
+                ),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: ElevatedButton(
+                    onPressed: () => Navigator.pop(context, true),
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: CardsColors.primary,
+                      foregroundColor: Colors.white,
+                      shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(10)),
+                      padding: const EdgeInsets.symmetric(vertical: 12),
+                      elevation: 0,
+                    ),
+                    child: const Text('メールを作成',
+                        style: TextStyle(
+                            fontWeight: FontWeight.w700, color: Colors.white)),
+                  ),
+                ),
+              ],
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+// ================================================================
+// ゴミ箱画面
+// ================================================================
+class _TrashPage extends ConsumerWidget {
+  const _TrashPage();
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final trashAsync = ref.watch(trashCardsStreamProvider);
+    return Scaffold(
+      backgroundColor: CardsColors.bg,
+      appBar: AppBar(
+        title: const Text('ゴミ箱', style: TextStyle(fontWeight: FontWeight.w700)),
+        backgroundColor: Colors.white,
+        foregroundColor: CardsColors.textMain,
+        elevation: 0,
+        bottom: PreferredSize(
+          preferredSize: const Size.fromHeight(1),
+          child: Container(height: 1, color: CardsColors.border),
+        ),
+      ),
+      body: trashAsync.when(
+        loading: () => const Center(child: CircularProgressIndicator(color: CardsColors.primary)),
+        error: (e, _) => Center(child: Text('エラー: $e')),
+        data: (cards) {
+          if (cards.isEmpty) {
+            return const Center(
+              child: Column(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  Text('🗑', style: TextStyle(fontSize: 48)),
+                  SizedBox(height: 12),
+                  Text('ゴミ箱は空です',
+                      style: TextStyle(fontSize: 16, color: CardsColors.textSub)),
+                ],
+              ),
+            );
+          }
+          return Column(
+            children: [
+              Container(
+                width: double.infinity,
+                padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 10),
+                color: CardsColors.redBg,
+                child: Row(children: [
+                  const Expanded(
+                    child: Text('削除済み名刺 — 「戻す」で復元、「完全削除」で消去',
+                        style: TextStyle(fontSize: 12, color: CardsColors.red)),
+                  ),
+                  TextButton(
+                    onPressed: () => _confirmEmptyTrash(context, ref, cards),
+                    child: const Text('すべて削除',
+                        style: TextStyle(fontSize: 12, color: CardsColors.red)),
+                  ),
+                ]),
+              ),
+              Expanded(
+                child: ListView.separated(
+                  padding: const EdgeInsets.all(24),
+                  itemCount: cards.length,
+                  separatorBuilder: (_, __) => const SizedBox(height: 8),
+                  itemBuilder: (_, i) => _TrashCard(card: cards[i]),
+                ),
+              ),
+            ],
+          );
+        },
+      ),
+    );
+  }
+
+  Future<void> _confirmEmptyTrash(
+      BuildContext context, WidgetRef ref, List<CardModel> cards) async {
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('すべて完全削除しますか？'),
+        content: const Text('ゴミ箱の名刺をすべて完全に削除します。\nこの操作は取り消せません。'),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('キャンセル')),
+          FilledButton(
+            style: FilledButton.styleFrom(backgroundColor: CardsColors.red),
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('すべて削除'),
+          ),
+        ],
+      ),
+    );
+    if (ok != true || !context.mounted) return;
+    for (final card in cards) {
+      await ref.read(deleteCardProvider(card.id).future);
+    }
+  }
+}
+
+class _TrashCard extends ConsumerWidget {
+  final CardModel card;
+  const _TrashCard({required this.card});
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    return Container(
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        border: Border.all(color: CardsColors.border),
+        borderRadius: BorderRadius.circular(12),
+      ),
+      child: Row(
+        children: [
+          Container(
+            width: 40, height: 40,
+            decoration: BoxDecoration(
+              color: CardsColors.primaryLight,
+              borderRadius: BorderRadius.circular(10),
+            ),
+            child: Center(
+              child: Text(
+                card.name.isNotEmpty ? card.name[0] : '?',
+                style: const TextStyle(
+                    fontSize: 18, fontWeight: FontWeight.w800,
+                    color: CardsColors.primary),
+              ),
+            ),
+          ),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(card.name,
+                    style: const TextStyle(
+                        fontSize: 14, fontWeight: FontWeight.w700,
+                        color: CardsColors.textMain)),
+                Text(card.company,
+                    style: const TextStyle(fontSize: 12, color: CardsColors.textSub)),
+              ],
+            ),
+          ),
+          OutlinedButton(
+            onPressed: () async {
+              await ref.read(restoreFromTrashProvider(card.id).future);
+              if (context.mounted) {
+                ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+                  content: Text('${card.name} を復元しました'),
+                  backgroundColor: CardsColors.green,
+                  behavior: SnackBarBehavior.floating,
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                ));
+              }
+            },
+            style: OutlinedButton.styleFrom(
+              side: const BorderSide(color: CardsColors.primary),
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+            ),
+            child: const Text('戻す', style: TextStyle(color: CardsColors.primary, fontSize: 12)),
+          ),
+          const SizedBox(width: 8),
+          OutlinedButton(
+            onPressed: () async {
+              final ok = await showDialog<bool>(
+                context: context,
+                builder: (ctx) => AlertDialog(
+                  title: const Text('完全削除しますか？'),
+                  content: Text('「${card.name}」を完全に削除します。\nこの操作は取り消せません。'),
+                  actions: [
+                    TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('キャンセル')),
+                    FilledButton(
+                      style: FilledButton.styleFrom(backgroundColor: CardsColors.red),
+                      onPressed: () => Navigator.pop(ctx, true),
+                      child: const Text('削除'),
+                    ),
+                  ],
+                ),
+              );
+              if (ok != true || !context.mounted) return;
+              await ref.read(deleteCardProvider(card.id).future);
+            },
+            style: OutlinedButton.styleFrom(
+              side: BorderSide(color: CardsColors.red.withOpacity(0.5)),
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+            ),
+            child: const Text('完全削除', style: TextStyle(color: CardsColors.red, fontSize: 12)),
           ),
         ],
       ),

@@ -29,7 +29,7 @@ class DeleteCardDialog extends ConsumerWidget {
                     color: CardsColors.textMain)),
             const SizedBox(height: 8),
             Text(
-              '${card.name}（${card.company}）の名刺を削除します。この操作は取り消せません。',
+              '${card.name}（${card.company}）の名刺をゴミ箱に移動します。\nゴミ箱から復元できます。',
               textAlign: TextAlign.center,
               style: const TextStyle(
                   fontSize: 13, color: CardsColors.textSub, height: 1.6),
@@ -53,12 +53,12 @@ class DeleteCardDialog extends ConsumerWidget {
                 const SizedBox(width: 10),
                 ElevatedButton(
                   onPressed: () async {
-                    await ref.read(deleteCardProvider(card.id).future);
+                    await ref.read(moveToTrashProvider(card.id).future);
                     if (context.mounted) {
                       Navigator.pop(context);
                       ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-                        content: Text('${card.name} の名刺を削除しました'),
-                        backgroundColor: CardsColors.red,
+                        content: Text('${card.name} をゴミ箱に移動しました'),
+                        backgroundColor: CardsColors.textMid,
                         behavior: SnackBarBehavior.floating,
                         shape: RoundedRectangleBorder(
                             borderRadius: BorderRadius.circular(10)),
