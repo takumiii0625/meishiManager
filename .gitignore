@@ -94,3 +94,7 @@ ios/.generated/
 *.mode1v3
 *.mode2v3
 *.perspectivev3
+tests/firestore/node_modules/
+linux/
+macos/
+tests/firestore/node_modules/
