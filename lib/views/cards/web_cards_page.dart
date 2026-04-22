@@ -691,266 +691,293 @@ class _WebCardsPageState extends ConsumerState<WebCardsPage>
   }
 
   // ── テーブル ────────────────────────────────────────────
+  // ── カスタムテーブル（列幅固定・省略表示対応）──────────────────
   Widget _buildTable(
       List<CardModel> cards, bool allChecked, bool someChecked) {
-    return LayoutBuilder(
-      builder: (context, constraints) {
-        return Container(
-          width: constraints.maxWidth,
-          decoration: BoxDecoration(
-            color: Colors.white,
-            border: Border.all(color: CardsColors.border),
-            borderRadius: BorderRadius.circular(14),
-            boxShadow: [
-              BoxShadow(
-                  color: Colors.black.withOpacity(0.04), blurRadius: 8),
-            ],
-          ),
-          child: ClipRRect(
-            borderRadius: BorderRadius.circular(14),
-            child: SingleChildScrollView(
-              scrollDirection: Axis.horizontal,
-              child: ConstrainedBox(
-                constraints:
-                    BoxConstraints(minWidth: constraints.maxWidth),
-                child: DataTable(
-                  headingRowColor: WidgetStateProperty.all(
-                      const Color(0xFFF8F9FC)),
-                  headingTextStyle: const TextStyle(
-                    fontSize: 11,
-                    fontWeight: FontWeight.w700,
-                    color: CardsColors.textSub,
-                    letterSpacing: 0.5,
-                  ),
-                  dataTextStyle: const TextStyle(
-                      fontSize: 13, color: CardsColors.textMain),
-                  dataRowMinHeight: 52,
-                  dataRowMaxHeight: 72,
-                  dividerThickness: 1,
-                  horizontalMargin: 16,
-                  columnSpacing: 24,
-                  columns: [
-                    // ヘッダーのチェックボックス列（全選択/全解除）
-                    DataColumn(
-                      label: Tooltip(
-                        message: allChecked ? '全解除' : '全選択',
-                        child: Checkbox(
-                          value: allChecked
-                              ? true
-                              : someChecked
-                                  ? null  // 一部選択 → 中間状態（-）
-                                  : false,
-                          tristate: true, // 中間状態（-）を許可
-                          onChanged: (_) => _toggleCheckAll(cards),
-                          activeColor: CardsColors.primary,
-                        ),
+    return Container(
+      decoration: BoxDecoration(
+        color: Colors.white,
+        border: Border.all(color: CardsColors.border),
+        borderRadius: BorderRadius.circular(14),
+        boxShadow: [
+          BoxShadow(color: Colors.black.withOpacity(0.04), blurRadius: 8),
+        ],
+      ),
+      child: ClipRRect(
+        borderRadius: BorderRadius.circular(14),
+        child: Column(
+          children: [
+            // ── ヘッダー行 ──
+            Container(
+              color: const Color(0xFFF8F9FC),
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+              child: Row(
+                children: [
+                  // チェックボックス
+                  SizedBox(
+                    width: 40,
+                    child: Tooltip(
+                      message: allChecked ? '全解除' : '全選択',
+                      child: Checkbox(
+                        value: allChecked ? true : someChecked ? null : false,
+                        tristate: true,
+                        onChanged: (_) => _toggleCheckAll(cards),
+                        activeColor: CardsColors.primary,
                       ),
                     ),
-                    const DataColumn(label: Text('名前')),
-                    const DataColumn(label: Text('会社名 / 部署')),
-                    const DataColumn(label: Text('業種')),
-                    const DataColumn(label: Text('メール')),
-                    const DataColumn(label: Text('電話番号')),
-                    const DataColumn(label: Text('操作')),
-                  ],
-                  rows: cards.map((card) {
-                    final isChecked = _checkedIds.contains(card.id);
-                    final isPanelOpen = _selectedCard?.id == card.id;
+                  ),
+                  _headerCell('名前', flex: 3),
+                  _headerCell('会社名 / 部署', flex: 3),
+                  _headerCell('業種', flex: 2),
+                  _headerCell('メール', flex: 3),
+                  _headerCell('電話番号', flex: 2),
+                  const SizedBox(width: 80, child: Text('操作',
+                      style: TextStyle(fontSize: 11, fontWeight: FontWeight.w700,
+                          color: CardsColors.textSub, letterSpacing: 0.5))),
+                ],
+              ),
+            ),
+            const Divider(height: 1, color: CardsColors.border),
+            // ── データ行 ──
+            ...cards.asMap().entries.map((entry) {
+              final i = entry.key;
+              final card = entry.value;
+              final isChecked = _checkedIds.contains(card.id);
+              final isPanelOpen = _selectedCard?.id == card.id;
+              final bgColor = isChecked
+                  ? CardsColors.primaryLight
+                  : isPanelOpen
+                      ? const Color(0xFFF0F4FF)
+                      : i.isOdd
+                          ? const Color(0xFFFAFAFC)
+                          : Colors.white;
 
-                    return DataRow(
-                      // チェック状態で行の背景色を変える
-                      color: WidgetStateProperty.resolveWith((states) {
-                        if (isChecked) {
-                          return CardsColors.primaryLight;
-                        }
-                        if (isPanelOpen) {
-                          return const Color(0xFFF0F4FF);
-                        }
-                        if (states.contains(WidgetState.hovered)) {
-                          return const Color(0xFFF8F9FC);
-                        }
-                        return Colors.white;
-                      }),
-                      cells: [
-                        // チェックボックスセル
-                        DataCell(
-                          Checkbox(
-                            value: isChecked,
-                            onChanged: (_) => _toggleCheck(card.id),
-                            activeColor: CardsColors.primary,
+              return Column(
+                children: [
+                  InkWell(
+                    onHover: (_) => setState(() {}),
+                    child: Container(
+                      color: bgColor,
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 16, vertical: 10),
+                      child: Row(
+                        children: [
+                          // チェックボックス
+                          SizedBox(
+                            width: 40,
+                            child: Checkbox(
+                              value: isChecked,
+                              onChanged: (_) => _toggleCheck(card.id),
+                              activeColor: CardsColors.primary,
+                            ),
                           ),
-                        ),
-                        // 名前（クリックで詳細パネル表示）
-                        DataCell(
-                          GestureDetector(
-                            onTap: () => setState(() =>
-                                _selectedCard =
-                                    isPanelOpen ? null : card),
-                            child: Row(children: [
-                              _avatar(card.name),
-                              const SizedBox(width: 10),
-                              Flexible(
-                                child: Column(
-                                  mainAxisSize: MainAxisSize.min,
-                                  mainAxisAlignment: MainAxisAlignment.center,
-                                  crossAxisAlignment: CrossAxisAlignment.start,
-                                  children: [
-                                    Text(card.name,
-                                        style: const TextStyle(
-                                            fontWeight: FontWeight.w600),
-                                        overflow: TextOverflow.ellipsis),
-                                    if (card.tags.isNotEmpty) ...[
-                                      const SizedBox(height: 3),
-                                      Wrap(
-                                        spacing: 4,
-                                        children: card.tags.take(3).map((tag) =>
-                                          Container(
-                                            padding: const EdgeInsets.symmetric(
-                                                horizontal: 6, vertical: 2),
-                                            decoration: BoxDecoration(
-                                              color: const Color(0xFFF0FDF4),
-                                              border: Border.all(
-                                                  color: const Color(0xFFBBF7D0)),
-                                              borderRadius: BorderRadius.circular(6),
-                                            ),
-                                            child: Text(tag,
-                                                style: const TextStyle(
-                                                    fontSize: 10,
-                                                    color: Color(0xFF16A34A))),
-                                          ),
-                                        ).toList(),
-                                      ),
+                          // 名前 + タグ
+                          Expanded(
+                            flex: 3,
+                            child: GestureDetector(
+                              onTap: () => setState(() =>
+                                  _selectedCard = isPanelOpen ? null : card),
+                              child: Row(children: [
+                                _avatar(card.name),
+                                const SizedBox(width: 8),
+                                Expanded(
+                                  child: Column(
+                                    crossAxisAlignment:
+                                        CrossAxisAlignment.start,
+                                    mainAxisSize: MainAxisSize.min,
+                                    children: [
+                                      Text(card.name,
+                                          style: const TextStyle(
+                                              fontWeight: FontWeight.w600,
+                                              fontSize: 13,
+                                              color: CardsColors.textMain),
+                                          overflow: TextOverflow.ellipsis),
+                                      if (card.tags.isNotEmpty) ...[
+                                        const SizedBox(height: 3),
+                                        Wrap(
+                                          spacing: 4,
+                                          children: card.tags
+                                              .take(3)
+                                              .map((tag) => Container(
+                                                    padding: const EdgeInsets
+                                                        .symmetric(
+                                                        horizontal: 6,
+                                                        vertical: 2),
+                                                    decoration: BoxDecoration(
+                                                      color: const Color(
+                                                          0xFFF0FDF4),
+                                                      border: Border.all(
+                                                          color: const Color(
+                                                              0xFFBBF7D0)),
+                                                      borderRadius:
+                                                          BorderRadius.circular(
+                                                              6),
+                                                    ),
+                                                    child: Text(tag,
+                                                        style: const TextStyle(
+                                                            fontSize: 10,
+                                                            color: Color(
+                                                                0xFF16A34A))),
+                                                  ))
+                                              .toList(),
+                                        ),
+                                      ],
                                     ],
-                                  ],
+                                  ),
                                 ),
+                              ]),
+                            ),
+                          ),
+                          // 会社名 / 部署
+                          Expanded(
+                            flex: 3,
+                            child: GestureDetector(
+                              onTap: () => setState(() =>
+                                  _selectedCard = isPanelOpen ? null : card),
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  Text(
+                                    card.company.isNotEmpty
+                                        ? card.company
+                                        : '—',
+                                    style: TextStyle(
+                                        fontSize: 13,
+                                        color: card.company.isNotEmpty
+                                            ? CardsColors.textMain
+                                            : CardsColors.textSub),
+                                    overflow: TextOverflow.ellipsis,
+                                  ),
+                                  if (card.affiliationText.isNotEmpty)
+                                    Text(
+                                      card.affiliationText,
+                                      style: const TextStyle(
+                                          fontSize: 11,
+                                          color: CardsColors.textSub),
+                                      overflow: TextOverflow.ellipsis,
+                                    ),
+                                ],
+                              ),
+                            ),
+                          ),
+                          // 業種
+                          Expanded(
+                            flex: 2,
+                            child: Text(
+                              card.industry.isNotEmpty
+                                  ? card.industry
+                                  : '—',
+                              style: TextStyle(
+                                  fontSize: 13,
+                                  color: card.industry.isNotEmpty
+                                      ? CardsColors.textMain
+                                      : CardsColors.textSub),
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                          ),
+                          // メール
+                          Expanded(
+                            flex: 3,
+                            child: card.email.isNotEmpty
+                                ? InkWell(
+                                    onTap: () async {
+                                      final confirmed =
+                                          await showDialog<bool>(
+                                        context: context,
+                                        builder: (context) =>
+                                            _MailConfirmDialog(
+                                                email: card.email),
+                                      );
+                                      if (confirmed == true) {
+                                        final mailApp = ref
+                                            .read(selectedMailAppProvider)
+                                            .valueOrNull ??
+                                            kWebMailApps.first;
+                                        await launchMailApp(
+                                            mailApp, card.email);
+                                      }
+                                    },
+                                    child: Row(children: [
+                                      Expanded(
+                                        child: Text(
+                                          card.email,
+                                          style: const TextStyle(
+                                            fontSize: 13,
+                                            color: CardsColors.primary,
+                                            decoration:
+                                                TextDecoration.underline,
+                                            decorationColor:
+                                                CardsColors.primary,
+                                          ),
+                                          overflow: TextOverflow.ellipsis,
+                                        ),
+                                      ),
+                                    ]),
+                                  )
+                                : const Text('—',
+                                    style: TextStyle(
+                                        color: CardsColors.textSub)),
+                          ),
+                          // 電話番号
+                          Expanded(
+                            flex: 2,
+                            child: Text(
+                              card.phone.isNotEmpty ? card.phone : '—',
+                              style: TextStyle(
+                                  fontSize: 13,
+                                  color: card.phone.isNotEmpty
+                                      ? CardsColors.textMain
+                                      : CardsColors.textSub),
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                          ),
+                          // 操作ボタン
+                          SizedBox(
+                            width: 80,
+                            child: Row(children: [
+                              _iconBtn(
+                                icon: Icons.open_in_new,
+                                color: CardsColors.primary,
+                                bg: CardsColors.primaryLight,
+                                tooltip: '詳細を表示',
+                                onTap: () => setState(() =>
+                                    _selectedCard =
+                                        isPanelOpen ? null : card),
+                              ),
+                              const SizedBox(width: 6),
+                              _iconBtn(
+                                icon: Icons.delete_outline,
+                                color: CardsColors.red,
+                                bg: CardsColors.redBg,
+                                tooltip: '削除',
+                                onTap: () => _showDeleteDialog(card),
                               ),
                             ]),
                           ),
-                        ),
-                        // 会社名 / 部署
-                        DataCell(
-                          GestureDetector(
-                            onTap: () => setState(() =>
-                                _selectedCard =
-                                    isPanelOpen ? null : card),
-                            child: Column(
-                              mainAxisSize: MainAxisSize.min,
-                              mainAxisAlignment: MainAxisAlignment.center,
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                Text(
-                                  card.company.isNotEmpty
-                                      ? card.company
-                                      : '—',
-                                  style: TextStyle(
-                                      color: card.company.isNotEmpty
-                                          ? CardsColors.textMain
-                                          : CardsColors.textSub,
-                                      fontSize: 13),
-                                  overflow: TextOverflow.ellipsis,
-                                  maxLines: 1,
-                                ),
-                                if (card.affiliationText.isNotEmpty)
-                                  Text(
-                                    card.affiliationText,
-                                    style: const TextStyle(
-                                        fontSize: 11,
-                                        color: CardsColors.textSub),
-                                    overflow: TextOverflow.ellipsis,
-                                    maxLines: 1,
-                                  ),
-                              ],
-                            ),
-                          ),
-                        ),
-                        // 業種
-                        DataCell(Text(
-                          card.industry.isNotEmpty ? card.industry : '—',
-                          style: TextStyle(
-                              color: card.industry.isNotEmpty
-                                  ? CardsColors.textMain
-                                  : CardsColors.textSub),
-                        )),
-                        // メール
-                        DataCell(
-                          card.email.isNotEmpty
-                              ? InkWell(
-                                  onTap: () async {
-                                    final confirmed = await showDialog<bool>(
-                                      context: context,
-                                      builder: (context) => _MailConfirmDialog(
-                                          email: card.email),
-                                    );
-                                    if (confirmed == true) {
-                                      final mailApp = ref
-                                          .read(selectedMailAppProvider)
-                                          .valueOrNull ?? kWebMailApps.first;
-                                      await launchMailApp(mailApp, card.email);
-                                    }
-                                  },
-                                  child: Row(
-                                    mainAxisSize: MainAxisSize.min,
-                                    children: [
-                                      Flexible(
-                                        child: Text(card.email,
-                                            style: const TextStyle(
-                                              color: CardsColors.primary,
-                                              decoration:
-                                                  TextDecoration.underline,
-                                              decorationColor:
-                                                  CardsColors.primary,
-                                            ),
-                                            overflow: TextOverflow.ellipsis),
-                                      ),
-                                      const SizedBox(width: 4),
-                                      const Icon(Icons.mail_outline,
-                                          size: 13, color: CardsColors.primary),
-                                    ],
-                                  ),
-                                )
-                              : const Text('—',
-                                  style:
-                                      TextStyle(color: CardsColors.textSub)),
-                        ),
-                        // 電話番号
-                        DataCell(Text(
-                          card.phone.isNotEmpty ? card.phone : '—',
-                          style: TextStyle(
-                              color: card.phone.isNotEmpty
-                                  ? CardsColors.textMain
-                                  : CardsColors.textSub),
-                        )),
-                        // 操作ボタン
-                        DataCell(Row(children: [
-                          _iconBtn(
-                            icon: Icons.open_in_new,
-                            color: CardsColors.primary,
-                            bg: CardsColors.primaryLight,
-                            tooltip: '詳細を表示',
-                            onTap: () => setState(() =>
-                                _selectedCard =
-                                    isPanelOpen ? null : card),
-                          ),
-                          const SizedBox(width: 6),
-                          _iconBtn(
-                            icon: Icons.delete_outline,
-                            color: CardsColors.red,
-                            bg: CardsColors.redBg,
-                            tooltip: '削除',
-                            onTap: () => _showDeleteDialog(card),
-                          ),
-                        ])),
-                      ],
-                    );
-                  }).toList(),
-                ),
-              ),
-            ),
-          ),
-        );
-      },
+                        ],
+                      ),
+                    ),
+                  ),
+                  const Divider(height: 1, color: CardsColors.border),
+                ],
+              );
+            }),
+          ],
+        ),
+      ),
     );
   }
+
+  Widget _headerCell(String label, {required int flex}) => Expanded(
+    flex: flex,
+    child: Text(label,
+        style: const TextStyle(
+            fontSize: 11,
+            fontWeight: FontWeight.w700,
+            color: CardsColors.textSub,
+            letterSpacing: 0.5)),
+  );
 
   Widget _avatar(String name) => Container(
         width: 32, height: 32,
